@@ -125,6 +125,11 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	if !cfg.LocalLogin && s.oidc == nil {
 		return nil, errors.New("TYPEHAUS_LOCAL_LOGIN=false requires OIDC to be configured")
 	}
+	if !cfg.LocalLogin && (cfg.OIDCGroupsClaim == "" || cfg.OIDCAdminGroup == "") {
+		// Without local login and without an SSO admin group nobody could
+		// ever administer typehaus.
+		return nil, errors.New("TYPEHAUS_LOCAL_LOGIN=false requires TYPEHAUS_OIDC_GROUPS_CLAIM and TYPEHAUS_OIDC_ADMIN_GROUP, otherwise nobody can sign in as administrator")
+	}
 	go s.janitor(ctx)
 	return s, nil
 }
@@ -358,13 +363,20 @@ func (s *Server) device(h func(http.ResponseWriter, *http.Request, *authDevice))
 			return
 		}
 		d := &authDevice{}
-		err := s.db.QueryRow(`SELECT d.id, d.user_id, u.username FROM devices d JOIN users u ON u.id = d.user_id
-			WHERE d.token_hash = ? AND u.disabled = 0`, hashToken(tok)).Scan(&d.ID, &d.UserID, &d.User)
+		var disabled bool
+		err := s.db.QueryRow(`SELECT d.id, d.user_id, u.username, u.disabled FROM devices d JOIN users u ON u.id = d.user_id
+			WHERE d.token_hash = ?`, hashToken(tok)).Scan(&d.ID, &d.UserID, &d.User, &disabled)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "device not enrolled or revoked")
 			return
 		}
 		s.db.Exec(`UPDATE devices SET last_seen = ?, last_ip = ? WHERE id = ?`, now(), s.clientIP(r), d.ID)
+		if disabled {
+			// Suspended, not revoked: the agent removes its fonts but keeps the
+			// enrollment, so re-enabling the account restores everything.
+			writeErr(w, http.StatusForbidden, "account disabled")
+			return
+		}
 		h(w, r, d)
 	})
 }

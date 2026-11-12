@@ -24,26 +24,18 @@ typehaus does the core of it, free:
 
 ## Quick start
 
-```yaml
-# docker-compose.yml
-services:
-  typehaus:
-    image: ghcr.io/4nonx/typehaus:latest
-    restart: unless-stopped
-    ports: ["8080:8080"]
-    volumes: ["typehaus-data:/data"]
-    environment:
-      TYPEHAUS_BASE_URL: "https://fonts.example.com"
-      TYPEHAUS_ADMIN_PASSWORD: "change-me-please"   # first start only
-volumes:
-  typehaus-data:
-```
+You need [`docker-compose.yaml`](docker-compose.yaml) and a `.env` based on [`.env.example`](.env.example). At minimum, set `TYPEHAUS_BASE_URL`:
 
 ```sh
+curl -LO https://raw.githubusercontent.com/4nonX/typehaus/main/docker-compose.yaml
+curl -L https://raw.githubusercontent.com/4nonX/typehaus/main/.env.example -o .env
+nano .env            # TYPEHAUS_BASE_URL, TYPEHAUS_ADMIN_PASSWORD
 docker compose up -d
 ```
 
-Open the UI and sign in as `admin`. If you didn't set `TYPEHAUS_ADMIN_PASSWORD`, a random password is printed in the container log on first start (`docker logs typehaus`).
+Using **Dockge**? Create a stack, paste the compose file and the `.env`, and deploy. The **[install guide](docs/install.md)** covers Dockge step by step, reverse proxies (Caddy, Nginx Proxy Manager, Traefik, Pangolin), backups, updates and troubleshooting.
+
+Open the UI and sign in as `admin`. If you didn't set `TYPEHAUS_ADMIN_PASSWORD`, a random password is printed in the container log on first start. Forgot it later? `docker exec typehaus typehaus-server reset-password admin`.
 
 Then:
 
@@ -52,7 +44,7 @@ Then:
 3. **Collections** → create a collection, choose who can see it, and add fonts to it from the Library (select → *Add to collection*).
 4. **Devices** → each user downloads typehaus, opens it, and connects with a one-time code.
 
-Put typehaus behind your reverse proxy (Caddy, Traefik, nginx, Pangolin…) with HTTPS. Set `TYPEHAUS_TRUST_PROXY=true` so client IPs and the scheme are taken from `X-Forwarded-*` headers.
+Put typehaus behind your reverse proxy with HTTPS. Allow uploads of a few hundred MB there; the [install guide](docs/install.md#reverse-proxy-and-https) has examples.
 
 ## The typehaus app (agent)
 
@@ -116,7 +108,10 @@ Behaviour worth knowing:
 - **Fonts in use:** a font that can't be removed because an application has it open (Windows) is retried on every sync.
 - **Integrity:** every download is verified against its SHA-256. Missing or damaged files are reinstalled automatically.
 - Only files the agent installed itself are ever touched. Your own fonts are left alone.
-- The apps aren't notarised or code-signed with a certificate yet. On macOS, right-click `typehaus.app` → *Open* the first time. On Windows, SmartScreen may ask once (*More info → Run anyway*).
+- The apps aren't notarised or code-signed with a certificate yet. On Windows, SmartScreen asks once (*More info → Run anyway*). On macOS, move typehaus.app to *Applications* first. Then on macOS 15+ open it once, go to *System Settings → Privacy & Security → Open Anyway*; on older macOS, right-click → *Open*.
+- **Updates:** when the server runs a newer version, the app shows *Update available* in its menu and window. The new download replaces the running app and takes over *Start at login*.
+- **Account disabled:** the app removes its fonts but stays connected; they come back automatically when the account is enabled again. Revoking a device or deleting the user disconnects it for good.
+- **Duplicate fonts:** files with the same PostScript name (e.g. two versions of a family) are marked in the library, and only one of them can be active per user. Activating one switches the other off.
 
 ## Configuration
 
@@ -134,7 +129,7 @@ All settings are environment variables.
 | `TYPEHAUS_SESSION_HOURS` | `168` | Web session lifetime |
 | `TYPEHAUS_POLL_SECONDS` | `60` | How often agents check for changes (min. 10) |
 | `TYPEHAUS_MAX_UPLOAD_MB` | `512` | Max size of one upload request |
-| `TYPEHAUS_LOCAL_LOGIN` | `true` | Set `false` to allow SSO only |
+| `TYPEHAUS_LOCAL_LOGIN` | `true` | Set `false` to allow SSO only (requires `TYPEHAUS_OIDC_GROUPS_CLAIM` and `TYPEHAUS_OIDC_ADMIN_GROUP`) |
 | `TYPEHAUS_AGENTS_DIR` | `/app/agents` (image) | Agent binaries offered on the Devices page |
 
 ### Single sign-on (OIDC)
@@ -144,7 +139,7 @@ All settings are environment variables.
 | `TYPEHAUS_OIDC_ISSUER` | Issuer URL (discovery via `/.well-known/openid-configuration`) |
 | `TYPEHAUS_OIDC_CLIENT_ID` / `TYPEHAUS_OIDC_CLIENT_SECRET` | Client credentials |
 | `TYPEHAUS_OIDC_NAME` | Button label, e.g. `Authentik` |
-| `TYPEHAUS_OIDC_GROUPS_CLAIM` | Claim with group names (e.g. `groups`). Users are placed into typehaus groups **with the same name** at every login. |
+| `TYPEHAUS_OIDC_GROUPS_CLAIM` | Claim with group names (e.g. `groups`). Users are placed into typehaus groups **with the same name** at every login. Groups assigned by hand in typehaus are kept. |
 | `TYPEHAUS_OIDC_ADMIN_GROUP` | Members of this IdP group become typehaus admins (requires the groups claim) |
 | `TYPEHAUS_OIDC_AUTO_CREATE` | `true`: create accounts on first login. `false`: only pre-created users may sign in. |
 
@@ -154,11 +149,11 @@ Redirect URI: `https://fonts.example.com/auth/oidc/callback`. The login uses the
 
 ## Backups
 
-Everything lives in `/data`: `typehaus.db` (SQLite, WAL mode) and `fonts/` (content-addressed files). Stop the container, or use `sqlite3 typehaus.db ".backup backup.db"`, and copy the directory.
+Everything lives in `/data`: `typehaus.db` (SQLite) and `fonts/` (content-addressed files). See the [install guide](docs/install.md#backup-and-restore) for a backup command that works while typehaus is running.
 
 ## Security notes
 
-- Passwords are hashed with bcrypt. Failed logins and enrollment attempts trigger an increasing lockout per client.
+- Passwords are hashed with bcrypt (recovery: `typehaus-server reset-password NAME`, also via `docker exec`). Failed logins and enrollment attempts trigger an increasing lockout per client.
 - Web sessions use HttpOnly, SameSite cookies. State-changing API calls require a custom header (CSRF protection). Strict CSP.
 - Device tokens and enrollment codes are stored only as SHA-256 hashes. Enrollment codes are single use and expire after 15 minutes.
 - Agents can only download fonts that are currently active **and** visible to their user.
@@ -172,7 +167,7 @@ typehaus covers the core workflow: central library, permissions, per-user activa
 
 - Auto-activation plugins for Adobe InDesign / Illustrator / Photoshop, Affinity, QuarkXPress (activating missing fonts when a document opens)
 - InDesign Server / prepress integrations
-- Font conflict and corruption reports, version history of a font
+- Conflict detection against fonts installed outside typehaus (system fonts), font corruption reports
 - Activating and browsing fonts directly from the tray app (today the library lives in the web UI)
 
 Contributions are very welcome, especially app plugins.

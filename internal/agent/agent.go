@@ -31,7 +31,11 @@ import (
 var Version = "dev"
 
 // ErrRevoked means the server no longer accepts this device's token.
-var ErrRevoked = errors.New("device token rejected by server (revoked or user disabled)")
+var ErrRevoked = errors.New("this computer was disconnected by the server")
+
+// ErrSuspended means the user's account is disabled. The enrollment stays
+// valid, but no fonts may be used until the account is enabled again.
+var ErrSuspended = errors.New("your typehaus account is disabled")
 
 // Config is persisted after enrollment.
 type Config struct {
@@ -60,10 +64,11 @@ type Installed struct {
 
 // State is the agent's local bookkeeping.
 type State struct {
-	ETag     string                `json:"etag"`
-	LastSync time.Time             `json:"last_sync"`
-	LastErr  string                `json:"last_error,omitempty"`
-	Fonts    map[string]*Installed `json:"fonts"`
+	ETag          string                `json:"etag"`
+	ServerVersion string                `json:"server_version,omitempty"`
+	LastSync      time.Time             `json:"last_sync"`
+	LastErr       string                `json:"last_error,omitempty"`
+	Fonts         map[string]*Installed `json:"fonts"`
 }
 
 // ConfigDir returns the per-user directory for config and state.
@@ -237,6 +242,7 @@ func Enroll(ctx context.Context, server, code, name, caFile string) (*Config, er
 		abs, _ = filepath.Abs(caFile)
 	}
 	c := &Config{Server: server, Token: er.Token, DeviceID: er.DeviceID, User: er.User, CAFile: abs}
+	rememberServer(server)
 	return c, SaveConfig(c)
 }
 
@@ -292,9 +298,13 @@ func (a *Agent) do(ctx context.Context, method, path string, body io.Reader, hdr
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
 		resp.Body.Close()
 		return nil, ErrRevoked
+	case http.StatusForbidden:
+		resp.Body.Close()
+		return nil, ErrSuspended
 	}
 	return resp, nil
 }
@@ -348,6 +358,7 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 		a.log.Warn("server speaks a newer protocol; please update the agent", "server", m.ProtocolVersion, "agent", protocol.Version)
 	}
 	res.PollSeconds = m.PollSeconds
+	st.ServerVersion = m.ServerVersion
 
 	want := map[string]protocol.ManifestFont{}
 	for _, f := range m.Fonts {
@@ -378,8 +389,16 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 			continue
 		}
 		if _, ok := want[sha]; ok && inst.PendingRemoval {
-			// re-activated before removal finished
-			inst.PendingRemoval = false
+			// Re-activated before the removal finished. The font was already
+			// unregistered (Windows: resource and registry value removed), only
+			// the locked file is left – register it again, or reinstall below
+			// if the file is gone or damaged.
+			if fileHasHash(inst.Path, sha) && a.sys.install(inst) == nil {
+				inst.PendingRemoval = false
+				changed = true
+			} else {
+				delete(st.Fonts, sha)
+			}
 			continue
 		}
 		if err := a.sys.uninstall(inst); err != nil {
@@ -552,6 +571,14 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.log.Info("removed fonts after revocation", "count", n)
 			}
 			return err
+		case errors.Is(err, ErrSuspended):
+			if !a.cfg.KeepOnRevoke {
+				if n, _, _ := a.RemoveAll(); n > 0 {
+					a.log.Warn("account disabled – removed fonts", "count", n)
+				}
+			}
+			backoff = 0
+			interval = 5 * time.Minute
 		case err != nil:
 			backoff = min(backoff+1, 6)
 			a.log.Warn("sync failed – fonts stay active, retrying", "err", err)

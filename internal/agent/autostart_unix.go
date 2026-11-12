@@ -163,6 +163,9 @@ func DisableAutostart(stop bool) error {
 	return nil
 }
 
+// InstallNotice tells the user how to fix an installation problem, if any.
+func InstallNotice() string { return "" }
+
 // AutostartEnabled reports whether an autostart entry exists.
 func AutostartEnabled() bool {
 	cfg, err := xdgConfig()

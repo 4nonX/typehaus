@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -163,19 +164,29 @@ func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
 	}
 	where, vargs := visibleClause(&authUser{ID: userID, IsAdmin: isAdmin})
 	args := append([]any{userID}, vargs...)
-	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size
+	// newest first, so the duplicate filter below keeps the newest upload
+	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name
 		FROM fonts f JOIN activations a ON a.font_id = f.id AND a.user_id = ?
-		WHERE `+where+` ORDER BY f.sha256, f.face_index`, args...)
+		WHERE `+where+` ORDER BY f.id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []protocol.ManifestFont{}
 	seen := map[string]bool{}
+	psSeen := map[string]bool{}
 	for rows.Next() {
 		var m protocol.ManifestFont
-		if err := rows.Scan(&m.ID, &m.SHA256, &m.Filename, &m.Family, &m.Style, &m.FullName, &m.Format, &m.Size); err != nil {
+		var ps string
+		if err := rows.Scan(&m.ID, &m.SHA256, &m.Filename, &m.Family, &m.Style, &m.FullName, &m.Format, &m.Size, &ps); err != nil {
 			return nil, err
+		}
+		// Safety net: never ship two files with the same PostScript name.
+		if ps != "" {
+			if psSeen[ps] && !seen[m.SHA256] {
+				continue
+			}
+			psSeen[ps] = true
 		}
 		if seen[m.SHA256] { // TTC: one file, several faces
 			continue
@@ -183,7 +194,11 @@ func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
 		seen[m.SHA256] = true
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SHA256 < out[j].SHA256 }) // stable ETag
+	return out, nil
 }
 
 func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *authDevice) {
@@ -193,7 +208,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		return
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%d|%s|%d|", protocol.Version, d.User, s.cfg.PollSeconds)
+	fmt.Fprintf(h, "%d|%s|%d|%s|", protocol.Version, d.User, s.cfg.PollSeconds, Version)
 	for _, f := range fonts {
 		h.Write([]byte(f.SHA256 + f.Filename))
 	}
@@ -207,6 +222,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		ProtocolVersion: protocol.Version,
 		User:            d.User,
 		PollSeconds:     s.cfg.PollSeconds,
+		ServerVersion:   Version,
 		Fonts:           fonts,
 	})
 }

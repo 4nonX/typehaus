@@ -14,8 +14,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/4nonX/typehaus/internal/agent"
@@ -32,6 +34,10 @@ type Server struct {
 	token string
 	addr  string
 	srv   *http.Server
+
+	// OnQuit is called when another process (a newer version, or the CLI)
+	// asks this instance to quit. Set by the tray / main loop.
+	OnQuit func()
 }
 
 // Start listens on a random loopback port.
@@ -98,6 +104,15 @@ func (s *Server) routes() http.Handler {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
 	mux.HandleFunc("POST /api/autostart", s.api(s.autostart))
+	mux.HandleFunc("POST /api/quit", s.api(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		if s.OnQuit != nil {
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				s.OnQuit()
+			}()
+		}
+	}))
 	mux.HandleFunc("POST /api/open-library", s.api(func(w http.ResponseWriter, r *http.Request) {
 		if st := s.c.Status(); st.Server != "" {
 			agent.OpenURL(st.Server)
@@ -127,6 +142,9 @@ func (s *Server) guard(next http.Handler) http.Handler {
 }
 
 func (s *Server) authed(r *http.Request) bool {
+	if h := r.Header.Get("X-Typehaus-Token"); h != "" { // local CLI / other instance
+		return subtle.ConstantTimeCompare([]byte(h), []byte(s.token)) == 1
+	}
 	c, err := r.Cookie(cookieName)
 	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) == 1
 }
@@ -159,13 +177,16 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		fonts = append(fonts, fontInfo{SHA256: f.SHA256, Family: f.Family, Style: f.Style, FullName: f.FullName})
 	}
 	writeJSON(w, 200, map[string]any{
-		"status":    s.c.Status(),
-		"events":    s.c.Events(),
-		"fonts":     fonts,
-		"autostart": agent.AutostartEnabled(),
-		"version":   agent.Version,
-		"hostname":  host,
-		"os":        runtime.GOOS,
+		"status":      s.c.Status(),
+		"events":      s.c.Events(),
+		"fonts":       fonts,
+		"autostart":   agent.AutostartEnabled(),
+		"version":     agent.Version,
+		"hostname":    host,
+		"os":          runtime.GOOS,
+		"last_server": agent.LastServer(),
+		"notice":      agent.InstallNotice(),
+		"update":      s.c.Update(),
 	})
 }
 
@@ -174,8 +195,9 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		Server string `json:"server"`
 		Code   string `json:"code"`
 		Name   string `json:"name"`
+		CAPEM  string `json:"ca_pem"` // optional: trust a private CA / self-signed cert
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<14)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, "invalid request")
 		return
@@ -184,13 +206,34 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "Server address and code are required.")
 		return
 	}
+	caFile := ""
+	if pem := strings.TrimSpace(req.CAPEM); pem != "" {
+		if !strings.Contains(pem, "-----BEGIN CERTIFICATE-----") {
+			writeErr(w, 400, "The certificate must be in PEM format (-----BEGIN CERTIFICATE----- …).")
+			return
+		}
+		dir, err := agent.ConfigDir()
+		if err == nil {
+			err = os.MkdirAll(dir, 0o700)
+		}
+		if err == nil {
+			caFile = filepath.Join(dir, "ca.pem")
+			err = os.WriteFile(caFile, []byte(pem+"\n"), 0o600)
+		}
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := s.c.Enroll(ctx, req.Server, req.Code, req.Name); err != nil {
+	if err := s.c.Enroll(ctx, req.Server, req.Code, req.Name, caFile); err != nil {
 		writeErr(w, 400, friendly(err))
 		return
 	}
 	// first connection: make sure fonts come back after a restart
+	// (fails harmlessly on macOS when run from outside Applications – the
+	// window shows how to fix that)
 	if !agent.AutostartEnabled() {
 		agent.EnableAutostart("tray", false)
 	}
@@ -205,7 +248,7 @@ func friendly(err error) string {
 	case regexp.MustCompile(`HTTP response to HTTPS client`).MatchString(msg):
 		return "This server doesn't use HTTPS. Enter the address with http:// in front – or better, ask your administrator to enable HTTPS."
 	case regexp.MustCompile(`certificate`).MatchString(msg):
-		return "The server's certificate isn't trusted by this computer. Ask your administrator, or enroll with --ca-file from the command line."
+		return "The server's certificate isn't trusted by this computer. If your server uses a private or self-signed certificate, paste its CA certificate under \"Advanced\"."
 	case regexp.MustCompile(`invalid or expired`).MatchString(msg):
 		return "That code is invalid or has expired. Create a new one under Devices in typehaus."
 	}

@@ -19,6 +19,7 @@ type userRow struct {
 	SSO         bool    `json:"sso"`
 	HasPassword bool    `json:"has_password"`
 	GroupIDs    []int64 `json:"group_ids"`
+	SSOGroupIDs []int64 `json:"sso_group_ids"` // memberships managed by SSO group sync
 	Devices     int     `json:"devices"`
 	Active      int     `json:"active_fonts"`
 	CreatedAt   int64   `json:"created_at"`
@@ -37,20 +38,24 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, u *auth
 	out := []*userRow{}
 	byID := map[int64]*userRow{}
 	for rows.Next() {
-		x := &userRow{GroupIDs: []int64{}}
+		x := &userRow{GroupIDs: []int64{}, SSOGroupIDs: []int64{}}
 		rows.Scan(&x.ID, &x.Username, &x.DisplayName, &x.Email, &x.IsAdmin, &x.Disabled, &x.SSO, &x.HasPassword,
 			&x.Devices, &x.Active, &x.CreatedAt)
 		out = append(out, x)
 		byID[x.ID] = x
 	}
 	rows.Close()
-	gr, err := s.db.Query(`SELECT user_id, group_id FROM user_groups`)
+	gr, err := s.db.Query(`SELECT user_id, group_id, source FROM user_groups`)
 	if err == nil {
 		for gr.Next() {
 			var uid, gid int64
-			gr.Scan(&uid, &gid)
+			var src string
+			gr.Scan(&uid, &gid, &src)
 			if x := byID[uid]; x != nil {
 				x.GroupIDs = append(x.GroupIDs, gid)
+				if src == "oidc" {
+					x.SSOGroupIDs = append(x.SSOGroupIDs, gid)
+				}
 			}
 		}
 		gr.Close()
@@ -110,10 +115,40 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *aut
 	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
+// setUserGroups sets the manual memberships. SSO-managed memberships are
+// kept unless the admin unticks them (they come back at the next SSO login
+// if the identity provider still lists the group).
 func (s *Server) setUserGroups(id int64, groups []int64) {
-	s.db.Exec(`DELETE FROM user_groups WHERE user_id = ?`, id)
+	keep := map[int64]bool{}
 	for _, g := range groups {
-		s.db.Exec(`INSERT OR IGNORE INTO user_groups (user_id, group_id) SELECT ?, id FROM groups WHERE id = ?`, id, g)
+		keep[g] = true
+	}
+	rows, err := s.db.Query(`SELECT group_id, source FROM user_groups WHERE user_id = ?`, id)
+	if err != nil {
+		return
+	}
+	type m struct {
+		gid int64
+		src string
+	}
+	var cur []m
+	for rows.Next() {
+		var x m
+		rows.Scan(&x.gid, &x.src)
+		cur = append(cur, x)
+	}
+	rows.Close()
+	have := map[int64]bool{}
+	for _, x := range cur {
+		if !keep[x.gid] {
+			s.db.Exec(`DELETE FROM user_groups WHERE user_id = ? AND group_id = ?`, id, x.gid)
+		}
+		have[x.gid] = true
+	}
+	for _, g := range groups {
+		if !have[g] {
+			s.db.Exec(`INSERT OR IGNORE INTO user_groups (user_id, group_id, source) SELECT ?, id, 'manual' FROM groups WHERE id = ?`, id, g)
+		}
 	}
 }
 

@@ -45,13 +45,33 @@ func plistArgs(mode string) string {
 	return out
 }
 
+// translocated reports whether macOS runs the app from a temporary,
+// randomised location (App Translocation: quarantined app opened from where
+// it was unzipped) or from a disk image. Autostart would point at a path
+// that disappears.
+func translocated() bool {
+	app := appBundle()
+	return app != "" && (strings.Contains(app, "/AppTranslocation/") || strings.HasPrefix(app, "/Volumes/"))
+}
+
+// InstallNotice tells the user how to fix an installation problem, if any.
+func InstallNotice() string {
+	if translocated() {
+		return "Move typehaus to your Applications folder and open it from there – otherwise it can't start at login."
+	}
+	return ""
+}
+
 // EnableAutostart installs a per-user LaunchAgent. mode is "tray" or "run".
 func EnableAutostart(mode string, startNow bool) (string, error) {
+	if translocated() {
+		return "", errors.New("move typehaus.app to your Applications folder, open it from there and try again")
+	}
 	if startNow {
 		StopRunning()
 	}
 	var bin string
-	if app := appBundle(); app != "" && !strings.HasPrefix(app, "/Volumes/") {
+	if app := appBundle(); app != "" {
 		// running from an installed typehaus.app: launch it in place
 		self, err := os.Executable()
 		if err != nil {

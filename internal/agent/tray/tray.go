@@ -27,15 +27,15 @@ type Options struct {
 }
 
 type labels struct {
-	open, library, sync, login, quit, connect, about string
+	open, library, sync, login, quit, connect, about, update string
 }
 
 // Windows and Linux use sentence case, macOS title case.
 func menuLabels() labels {
 	if runtime.GOOS == "darwin" {
-		return labels{"Open typehaus", "Open Font Library", "Sync Now", "Start at Login", "Quit typehaus", "Connect to Server…", "typehaus %s"}
+		return labels{"Open typehaus", "Open Font Library", "Sync Now", "Start at Login", "Quit typehaus", "Connect to Server…", "typehaus %s", "Update Available – typehaus %s…"}
 	}
-	return labels{"Open typehaus", "Open font library", "Sync now", "Start at login", "Quit typehaus", "Connect to server…", "typehaus %s"}
+	return labels{"Open typehaus", "Open font library", "Sync now", "Start at login", "Quit typehaus", "Connect to server…", "typehaus %s", "Update available – typehaus %s…"}
 }
 
 // Run shows the tray and blocks until the user quits. It must be called on
@@ -45,6 +45,7 @@ func Run(c *agent.Controller, win *ui.Server, log *slog.Logger, opts Options) er
 		return ErrUnavailable
 	}
 	t := &trayApp{c: c, win: win, log: log, opts: opts, L: menuLabels()}
+	win.OnQuit = t.quitApp
 	systray.Run(t.ready, func() {})
 	return nil
 }
@@ -60,7 +61,8 @@ type trayApp struct {
 	frame   int
 	iconKey string
 
-	status, detail, open, library, sync, login, about, quit *systray.MenuItem
+	status, detail, open, library, sync, login, about, update, quit *systray.MenuItem
+	quitOnce                                                        sync.Once
 }
 
 func (t *trayApp) ready() {
@@ -79,6 +81,8 @@ func (t *trayApp) ready() {
 	systray.AddSeparator()
 	t.login = systray.AddMenuItemCheckbox(t.L.login, "Start typehaus when you log in", agent.AutostartEnabled())
 	systray.AddSeparator()
+	t.update = systray.AddMenuItem("", "Download the new version from your typehaus server")
+	t.update.Hide()
 	t.about = systray.AddMenuItem(fmt.Sprintf(t.L.about, agent.Version), "")
 	t.about.Disable()
 	t.quit = systray.AddMenuItem(t.L.quit, "Fonts stay installed until you disconnect")
@@ -148,14 +152,24 @@ func (t *trayApp) clicks() {
 				t.log.Error("enable autostart", "err", err)
 			}
 			t.syncLoginCheck()
+		case <-t.update.ClickedCh:
+			if u := t.c.Update(); u.Available {
+				agent.OpenURL(u.URL)
+			}
 		case <-t.quit.ClickedCh:
-			t.c.Stop()
-			t.win.Close()
-			agent.ClearWindowURL()
-			systray.Quit()
+			t.quitApp()
 			return
 		}
 	}
+}
+
+func (t *trayApp) quitApp() {
+	t.quitOnce.Do(func() {
+		t.c.Stop()
+		t.win.Close()
+		agent.ClearInstance()
+		systray.Quit()
+	})
 }
 
 func (t *trayApp) showWindow() {
@@ -231,6 +245,9 @@ func (t *trayApp) refresh() {
 		head = "Some fonts need attention"
 		sub = st.Detail
 		tip = "typehaus – some fonts could not be installed"
+	case agent.PhaseSuspended:
+		head, tip = "Account disabled – fonts removed", "typehaus – account disabled"
+		sub = "Fonts return when your account is enabled"
 	default:
 		head, tip = "Not connected", "typehaus – not connected"
 		sub = st.Detail
@@ -249,6 +266,13 @@ func (t *trayApp) refresh() {
 		t.detail.Show()
 	}
 	systray.SetTooltip(tip)
+
+	if u := t.c.Update(); u.Available {
+		t.update.SetTitle(fmt.Sprintf(t.L.update, u.Version))
+		t.update.Show()
+	} else {
+		t.update.Hide()
+	}
 
 	connected := st.Phase != agent.PhaseDisconnected
 	if connected {

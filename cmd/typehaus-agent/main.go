@@ -109,6 +109,9 @@ func cmdEnroll(ctx context.Context, args []string) error {
 	if *server == "" || *code == "" {
 		return errors.New("--server and --code are required")
 	}
+	if agent.RunningInstance() != nil {
+		return errors.New("the typehaus app is running – connect from its window (menu → Open typehaus), or quit it first")
+	}
 	if c, err := agent.LoadConfig(); err == nil {
 		fmt.Printf("Note: replacing existing enrollment for %s on %s\n", c.User, c.Server)
 	}
@@ -153,9 +156,13 @@ func fileLogger() (*slog.Logger, func()) {
 
 // cmdTray runs the tray / menu-bar app with the agent window.
 func cmdTray(autostart bool) error {
-	// Already running? Bring up its window instead of starting twice.
-	if u := agent.RunningWindowURL(); u != "" {
-		return agent.OpenURL(u)
+	// Already running? Bring up its window instead of starting twice –
+	// unless this is a different version (an update): then take over.
+	if in := agent.RunningInstance(); in != nil {
+		if in.Version == version {
+			return agent.OpenURL(in.URL)
+		}
+		in.Replace()
 	}
 	detachConsole()
 	release, err := agent.WritePID()
@@ -166,17 +173,34 @@ func cmdTray(autostart bool) error {
 	log, closeLog := fileLogger()
 	defer closeLog()
 
-	log.Info("typehaus starting", "version", version, "os", runtime.GOOS, "tray", tray.Available())
 	c := agent.NewController(log)
 	win, err := ui.Start(c)
 	if err != nil {
 		return err
 	}
-	agent.PublishWindowURL(win.URL())
-	defer agent.ClearWindowURL()
+	agent.PublishInstance(win.URL())
+	defer agent.ClearInstance()
+	// until the tray (or background loop) takes over, a quit request exits
+	win.OnQuit = func() {
+		c.Stop()
+		win.Close()
+		agent.ClearInstance()
+		release()
+		os.Exit(0)
+	}
+	agent.RefreshAutostart() // a newly downloaded version replaces the login copy
 	c.Start()
 
-	if tray.Available() {
+	// At login the panel may not be ready yet (Linux); give it time. Syncing
+	// and the window already work meanwhile.
+	wait := 3 * time.Second
+	if autostart {
+		wait = 90 * time.Second
+	}
+	hasTray := tray.WaitAvailable(wait)
+	log.Info("typehaus started", "version", version, "os", runtime.GOOS, "tray", hasTray)
+
+	if hasTray {
 		return tray.Run(c, win, log, tray.Options{OpenWindowIfDisconnected: !autostart})
 	}
 	// No tray host (e.g. GNOME without the AppIndicator extension): keep
@@ -188,6 +212,7 @@ func cmdTray(autostart bool) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	win.OnQuit = stop
 	<-ctx.Done()
 	c.Stop()
 	win.Close()
@@ -231,6 +256,13 @@ func cmdSync(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
 	force := fs.Bool("force", false, "re-download the manifest and verify every installed file")
 	fs.Parse(args)
+	if in := agent.RunningInstance(); in != nil {
+		if err := in.Call("sync"); err != nil {
+			return fmt.Errorf("the typehaus app is running but did not respond: %w", err)
+		}
+		fmt.Println("Asked the running typehaus app to sync. See its window for the result.")
+		return nil
+	}
 	cfg, err := agent.LoadConfig()
 	if err != nil {
 		return err
@@ -313,7 +345,7 @@ func cmdAutostart(args []string) error {
 		if tray.Available() {
 			mode = "tray"
 		}
-		msg, err := agent.EnableAutostart(mode, true)
+		msg, err := agent.EnableAutostart(mode, agent.RunningInstance() == nil)
 		if err != nil {
 			return err
 		}
@@ -330,6 +362,9 @@ func cmdAutostart(args []string) error {
 }
 
 func cmdUnenroll() error {
+	if in := agent.RunningInstance(); in != nil {
+		in.Replace() // quit the tray app so it doesn't re-install fonts
+	}
 	agent.DisableAutostart(true)
 	cfg, err := agent.LoadConfig()
 	if err != nil {

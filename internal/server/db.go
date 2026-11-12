@@ -127,6 +127,12 @@ CREATE TABLE audit (
 );
 CREATE INDEX audit_ts ON audit(ts);
 `,
+	// 2: remember where a group membership came from, so SSO group sync
+	// only manages memberships it created
+	`
+ALTER TABLE user_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+CREATE INDEX fonts_psname ON fonts(postscript_name) WHERE postscript_name != '';
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

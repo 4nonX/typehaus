@@ -3,8 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +22,7 @@ const (
 	PhaseOK           Phase = "ok"           // in sync
 	PhaseOffline      Phase = "offline"      // server unreachable; fonts stay active
 	PhaseError        Phase = "error"        // some fonts could not be installed
+	PhaseSuspended    Phase = "suspended"    // account disabled: fonts removed, enrollment kept
 )
 
 // Status is a snapshot for UIs.
@@ -162,8 +166,8 @@ func (c *Controller) SyncNow() {
 }
 
 // Enroll connects this computer and starts syncing.
-func (c *Controller) Enroll(ctx context.Context, server, code, name string) error {
-	cfg, err := Enroll(ctx, server, code, name, "")
+func (c *Controller) Enroll(ctx context.Context, server, code, name, caFile string) error {
+	cfg, err := Enroll(ctx, server, code, name, caFile)
 	if err != nil {
 		return err
 	}
@@ -260,6 +264,20 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 				*s = Status{Phase: PhaseDisconnected, Detail: "This computer was disconnected by the server."}
 			})
 			return
+		case errors.Is(err, ErrSuspended):
+			if c.Status().Phase != PhaseSuspended {
+				n := 0
+				if !cfg.KeepOnRevoke {
+					n, _, _ = a.RemoveAll()
+				}
+				c.addEvent("error", fmt.Sprintf("Your typehaus account is disabled – %d font file(s) were removed until it is enabled again", n))
+			}
+			backoff = 0
+			interval = 5 * time.Minute
+			c.update(func(s *Status) {
+				s.Phase, s.Fonts = PhaseSuspended, c.installedCount()
+				s.Detail = "Your typehaus account is disabled. Fonts come back automatically once an administrator enables it again."
+			})
 		case err != nil:
 			backoff = min(backoff+1, 6)
 			prev := c.Status().Phase
@@ -315,4 +333,67 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 		case <-t.C:
 		}
 	}
+}
+
+// UpdateInfo describes a newer agent offered by the server.
+type UpdateInfo struct {
+	Available bool   `json:"available"`
+	Version   string `json:"version,omitempty"`
+	URL       string `json:"url,omitempty"` // where to download it
+}
+
+// Update reports whether the server runs a newer release than this agent.
+// The server bundles agents of its own version, so a newer server version
+// means a newer agent is available for download there.
+func (c *Controller) Update() UpdateInfo {
+	st, err := LoadState()
+	if err != nil || st.ServerVersion == "" {
+		return UpdateInfo{}
+	}
+	c.mu.Lock()
+	server := ""
+	if c.cfg != nil {
+		server = c.cfg.Server
+	}
+	c.mu.Unlock()
+	if server == "" || !newerVersion(st.ServerVersion, Version) {
+		return UpdateInfo{}
+	}
+	return UpdateInfo{Available: true, Version: strings.TrimPrefix(st.ServerVersion, "v"), URL: server + "/#/devices"}
+}
+
+// newerVersion reports a > b for x.y.z versions; anything that is not a
+// release version (dev builds, "edge") never counts as newer.
+func newerVersion(a, b string) bool {
+	pa, oka := parseVersion(a)
+	pb, okb := parseVersion(b)
+	if !oka || !okb {
+		return false
+	}
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) ([3]int, bool) {
+	var out [3]int
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
 }

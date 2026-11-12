@@ -294,9 +294,9 @@ async function renderLibrary(page) {
       </section>
     </div>`;
 
-  $$('.side a[data-coll]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); L.coll = a.dataset.coll; L.selected.clear(); renderLibrary(page); });
+  $$('.side a[data-coll]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); L.coll = a.dataset.coll; L.selected.clear(); L.shown = 0; renderLibrary(page); });
   const q = $('#q', page);
-  q.oninput = () => { L.q = q.value; drawFamilies(); };
+  q.oninput = () => { L.q = q.value; L.shown = 0; drawFamilies(); };
   const pv = $('#pv', page);
   pv.oninput = () => { L.preview = pv.value; $$('.specimen:not(.nopreview)', page).forEach((el) => el.textContent = L.preview || el.dataset.def); };
   const sz = $('#sz', page);
@@ -322,17 +322,22 @@ function drawFamilies() {
     return;
   }
   const admin = S.me.is_admin;
-  box.innerHTML = fams.map((fam) => {
+  // Render in pages so large libraries stay fast; more on scroll.
+  const PAGE = 60;
+  L.shown = Math.max(L.shown || PAGE, PAGE);
+  const visibleFams = fams.slice(0, L.shown);
+  box.innerHTML = visibleFams.map((fam) => {
     const open = L.expanded.has(fam.name);
     const allSel = fam.faces.every((f) => L.selected.has(f.id));
     const lic = admin && fam.rep.license_id ? L.licenses.find((l) => l.id === fam.rep.license_id) : null;
     const restricted = fam.faces.some((f) => f.fs_type & 0x2 && !(f.fs_type & 0xc));
+    const conflict = fam.faces.some((f) => f.conflict);
     return `<div class="family" data-fam="${esc(fam.name)}">
       <div class="family-head">
         ${admin ? `<input type="checkbox" class="selfam" ${allSel ? 'checked' : ''} title="Select family">` : ''}
         <label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>
         <span class="name">${esc(fam.name)}</span>
-        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · <span class="badge">${esc(lic.name)}</span>` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}</span>
+        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · <span class="badge">${esc(lic.name)}</span>` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}</span>
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
@@ -341,12 +346,20 @@ function drawFamilies() {
       ${open ? `<div class="styles">${fam.faces.map((f) => `
         <div class="style-row" data-id="${f.id}">
           ${admin ? `<input type="checkbox" class="selface" ${L.selected.has(f.id) ? 'checked' : ''}>` : '<span></span>'}
-          <span class="sname" title="${esc(f.full_name)} · ${esc(f.postscript_name)} · v${esc(f.version)} · ${f.format.toUpperCase()} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}</span></span>
+          <span class="sname" title="${esc(f.full_name)} · ${esc(f.postscript_name)} · v${esc(f.version)} · ${f.format.toUpperCase()} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
           <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
           <label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>
         </div>`).join('')}</div>` : ''}
     </div>`;
-  }).join('');
+  }).join('') + (fams.length > L.shown ? `<div class="more" id="more">Showing ${L.shown} of ${fams.length} families…</div>` : '');
+
+  const more = $('#more', box);
+  if (more) {
+    const io = new IntersectionObserver((en) => {
+      if (en.some((e) => e.isIntersecting)) { io.disconnect(); L.shown += PAGE; drawFamilies(); }
+    }, { rootMargin: '600px' });
+    io.observe(more);
+  }
 
   $$('.actfam', box).forEach((cb) => {
     const fam = fams.find((x) => x.name === cb.closest('.family').dataset.fam);
@@ -375,12 +388,17 @@ function drawFamilies() {
 
 async function setActive(ids, on) {
   try {
-    await api(on ? 'POST' : 'DELETE', '/api/activations', { font_ids: ids });
-    for (const f of S.lib.fonts) if (ids.includes(f.id)) f.activated = on;
+    const r = await api(on ? 'POST' : 'DELETE', '/api/activations', { font_ids: ids });
     toast(on ? `Activated ${plural(ids.length, 'style')} – your devices sync shortly` : `Deactivated ${plural(ids.length, 'style')}`);
+    if (on && r.replaced) toast(`${plural(r.replaced, 'style')} with the same name switched off – only one version can be active`);
+    S.lib.loaded = false; // reload: conflicts may have switched other fonts off
   } catch (e) { fail(e); }
   const page = $('#page');
-  if (page && route() === 'library') renderLibrary(page);
+  if (page && route() === 'library') {
+    const y = window.scrollY;
+    await renderLibrary(page);
+    window.scrollTo(0, y);
+  }
 }
 
 function drawBulk() {
@@ -443,6 +461,7 @@ async function upload(files) {
     const errs = r.filter((x) => x.status === 'error');
     toast(`${added} added${dup ? `, ${dup} already in library` : ''}${errs.length ? `, ${errs.length} failed` : ''}`);
     errs.slice(0, 5).forEach((x) => toast(`${x.file}: ${x.message}`, true));
+    r.filter((x) => x.status === 'added' && x.message).slice(0, 3).forEach((x) => toast(`${x.file}: ${x.message}`));
   } catch (e) { fail(e); }
   L.loaded = false;
   renderLibrary($('#page'));
@@ -587,7 +606,7 @@ async function renderPeople(page) {
     <table class="t"><thead><tr><th>User</th><th>Groups</th><th>Sign-in</th><th class="num">Active</th><th class="num">Devices</th><th></th></tr></thead><tbody>
     ${users.map((u) => `<tr style="${u.disabled ? 'opacity:.5' : ''}"><td><b>${esc(u.username)}</b>${u.display_name && u.display_name !== u.username ? ` <span class="muted">${esc(u.display_name)}</span>` : ''}
         ${u.is_admin ? ' <span class="badge">admin</span>' : ''}${u.disabled ? ' <span class="badge warn">disabled</span>' : ''}${u.email ? `<div class="small muted">${esc(u.email)}</div>` : ''}</td>
-      <td>${u.group_ids.map((g) => `<span class="badge">${esc(gname(g))}</span>`).join(' ') || '<span class="muted small">–</span>'}</td>
+      <td>${u.group_ids.map((g) => `<span class="badge" ${u.sso_group_ids.includes(g) ? 'title="From single sign-on"' : ''}>${esc(gname(g))}${u.sso_group_ids.includes(g) ? ' ↻' : ''}</span>`).join(' ') || '<span class="muted small">–</span>'}</td>
       <td class="small">${[u.has_password && 'password', u.sso && 'SSO'].filter(Boolean).join(' + ') || '<span class="muted">none</span>'}</td>
       <td class="num">${u.active_fonts}</td><td class="num">${u.devices}</td>
       <td style="text-align:right"><button class="btn sm" data-edit="${u.id}">Edit</button>${u.id !== S.me.id ? ` <button class="btn sm danger" data-del="${u.id}">Delete</button>` : ''}</td></tr>`).join('')}
@@ -597,7 +616,7 @@ async function renderPeople(page) {
       ${groups.map((g) => `<tr><td><b>${esc(g.name)}</b></td><td class="muted">${esc(g.description)}</td><td class="num">${g.members}</td>
       <td style="text-align:right"><button class="btn sm" data-gedit="${g.id}">Edit</button> <button class="btn sm danger" data-gdel="${g.id}">Delete</button></td></tr>`).join('')}
     </tbody></table>` : '<p class="muted">No groups yet.</p>'}
-    ${S.auth?.oidc ? '<p class="small muted">With TYPEHAUS_OIDC_GROUPS_CLAIM set, SSO users are placed into groups whose names match their identity provider groups at every login.</p>' : ''}`;
+    ${S.auth?.oidc ? '<p class="small muted">With TYPEHAUS_OIDC_GROUPS_CLAIM set, SSO users are placed into groups whose names match their identity provider groups at every login (marked ↻). Groups you assign by hand are kept.</p>' : ''}`;
 
   const editUser = (u) => dialog(u ? `Edit ${u.username}` : 'New user', `
     <label class="field">Username<input type="text" name="username" required value="${esc(u?.username)}" autocomplete="off"></label>
@@ -606,7 +625,7 @@ async function renderPeople(page) {
     <label class="field">${u ? 'New password (leave empty to keep)' : 'Password (min. 10 characters; leave empty for SSO-only)'}<input type="password" name="password" minlength="10" autocomplete="new-password"></label>
     <div class="field small">Groups<div class="checks">${groups.map((g) => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${u?.group_ids.includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<span class="muted">No groups yet</span>'}</div></div>
     <label class="check"><input type="checkbox" name="is_admin" ${u?.is_admin ? 'checked' : ''} ${u?.id === S.me.id ? 'disabled' : ''}> Administrator</label>
-    ${u ? `<label class="check"><input type="checkbox" name="disabled" ${u.disabled ? 'checked' : ''} ${u.id === S.me.id ? 'disabled' : ''}> Disabled (signs out, devices stop syncing)</label>` : ''}`,
+    ${u ? `<label class="check"><input type="checkbox" name="disabled" ${u.disabled ? 'checked' : ''} ${u.id === S.me.id ? 'disabled' : ''}> Disabled – signs out; their computers remove typehaus fonts until the account is enabled again</label>` : ''}`,
   {
     onSubmit: async (fd) => {
       const body = { username: fd.get('username'), display_name: fd.get('display_name'), email: fd.get('email'), group_ids: fd.getAll('g').map(Number) };

@@ -37,6 +37,7 @@ type Manifest struct {
 	ProtocolVersion int            `json:"protocol_version"`
 	User            string         `json:"user"`
 	PollSeconds     int            `json:"poll_seconds"`
+	ServerVersion   string         `json:"server_version,omitempty"`
 	Fonts           []ManifestFont `json:"fonts"`
 }
 

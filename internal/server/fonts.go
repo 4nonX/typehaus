@@ -51,6 +51,7 @@ type fontRow struct {
 	FSType         int     `json:"fs_type"`
 	LicenseID      *int64  `json:"license_id"`
 	Activated      bool    `json:"activated"`
+	Conflict       bool    `json:"conflict"` // another file in the library has the same PostScript name
 	Collections    []int64 `json:"collections"`
 	CreatedAt      int64   `json:"created_at"`
 }
@@ -70,7 +71,8 @@ func scanFont(sc interface{ Scan(...any) error }, f *fontRow) error {
 
 func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *authUser) {
 	where, args := visibleClause(u)
-	q := `SELECT ` + fontCols + `, EXISTS(SELECT 1 FROM activations a WHERE a.font_id = f.id AND a.user_id = ?)
+	q := `SELECT ` + fontCols + `, EXISTS(SELECT 1 FROM activations a WHERE a.font_id = f.id AND a.user_id = ?),
+		f.postscript_name != '' AND EXISTS(SELECT 1 FROM fonts f2 WHERE f2.postscript_name = f.postscript_name AND f2.sha256 != f.sha256)
 		FROM fonts f WHERE ` + where
 	args = append([]any{u.ID}, args...)
 	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
@@ -99,7 +101,7 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		var lic sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 			&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
-			&f.Activated); err != nil {
+			&f.Activated, &f.Conflict); err != nil {
 			rows.Close()
 			s.internalErr(w, err)
 			return
@@ -368,6 +370,20 @@ func (s *Server) ingestFont(name string, data []byte, u *authUser) (uploadResult
 		return res, nil
 	}
 	res.Status = "added"
+	var dupes []string
+	for _, f := range info.Faces {
+		if f.PostScriptName == "" {
+			continue
+		}
+		var other string
+		if s.db.QueryRow(`SELECT full_name || ' (v' || version || ')' FROM fonts WHERE postscript_name = ? AND sha256 != ? LIMIT 1`,
+			f.PostScriptName, sha).Scan(&other) == nil {
+			dupes = append(dupes, other)
+		}
+	}
+	if len(dupes) > 0 {
+		res.Message = "same PostScript name as " + strings.Join(dupes, ", ") + " – only one of them can be active at a time"
+	}
 	s.audit(u, "font.upload", "%s: %s", clean, strings.Join(res.Faces, ", "))
 	return res, ids
 }
@@ -488,10 +504,11 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request, u *authU
 		return
 	}
 	n, _ := res.RowsAffected()
+	replaced := s.resolveConflicts(u.ID, req.FontIDs)
 	if n > 0 {
 		s.audit(u, "font.activate", "%d font(s)", n)
 	}
-	writeJSON(w, 200, map[string]int64{"activated": n})
+	writeJSON(w, 200, map[string]int64{"activated": n, "replaced": replaced})
 }
 
 func (s *Server) handleDeactivate(w http.ResponseWriter, r *http.Request, u *authUser) {
@@ -519,4 +536,36 @@ func (s *Server) handleDeactivate(w http.ResponseWriter, r *http.Request, u *aut
 		s.audit(u, "font.deactivate", "%d font(s)", n)
 	}
 	writeJSON(w, 200, map[string]int64{"deactivated": n})
+}
+
+// resolveConflicts keeps at most one active font per PostScript name for a
+// user: fonts just activated win over previously active ones, and among the
+// requested ones the most recently uploaded wins. Two files with the same
+// PostScript name installed side by side confuse applications and
+// documents.
+func (s *Server) resolveConflicts(userID int64, requested []int64) int64 {
+	if len(requested) == 0 {
+		return 0
+	}
+	ph := placeholders(len(requested))
+	args := append([]any{userID}, int64Args(requested)...)
+	args = append(args, int64Args(requested)...)
+	r1, err := s.db.Exec(`DELETE FROM activations WHERE user_id = ? AND font_id IN (
+		SELECT f2.id FROM fonts f1 JOIN fonts f2 ON f2.postscript_name = f1.postscript_name AND f2.sha256 != f1.sha256
+		WHERE f1.id IN (`+ph+`) AND f1.postscript_name != '' AND f2.id NOT IN (`+ph+`))`, args...)
+	if err != nil {
+		s.log.Error("resolve conflicts", "err", err)
+		return 0
+	}
+	n1, _ := r1.RowsAffected()
+	args = append([]any{userID}, int64Args(requested)...)
+	args = append(args, int64Args(requested)...)
+	r2, err := s.db.Exec(`DELETE FROM activations WHERE user_id = ? AND font_id IN (
+		SELECT f1.id FROM fonts f1 JOIN fonts f2 ON f2.postscript_name = f1.postscript_name AND f2.sha256 != f1.sha256 AND f2.id > f1.id
+		WHERE f1.id IN (`+ph+`) AND f2.id IN (`+ph+`) AND f1.postscript_name != '')`, args...)
+	if err != nil {
+		return n1
+	}
+	n2, _ := r2.RowsAffected()
+	return n1 + n2
 }

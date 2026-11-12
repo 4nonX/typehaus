@@ -199,3 +199,4 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 .enroll p { margin: 6px 0 0; }
 details.cli { margin-top: 14px; }
 details.cli summary { cursor: pointer; color: var(--ink-2); margin-bottom: 10px; }
+.more { padding: 30px; text-align: center; color: var(--ink-3); font-size: 13px; }

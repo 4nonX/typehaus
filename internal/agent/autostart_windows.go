@@ -65,6 +65,9 @@ func DisableAutostart(stop bool) error {
 	return nil
 }
 
+// InstallNotice tells the user how to fix an installation problem, if any.
+func InstallNotice() string { return "" }
+
 // AutostartEnabled reports whether a logon entry exists.
 func AutostartEnabled() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)

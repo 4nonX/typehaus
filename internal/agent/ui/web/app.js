@@ -34,6 +34,7 @@ const HEADLINE = {
   ok: ['Up to date', ''],
   offline: ['Server unreachable', 'Your fonts stay active. typehaus keeps retrying in the background.'],
   error: ['Some fonts need attention', ''],
+  suspended: ['Account disabled', 'Your typehaus fonts were removed from this computer. They come back automatically once an administrator enables your account again.'],
   disconnected: ['Not connected', ''],
 };
 
@@ -51,10 +52,20 @@ async function refresh() {
   const phase = S.status.phase;
   // do not re-render the connect form while the user is typing in it
   if (phase === 'disconnected' && $('#connect')) { updateNotice(); return; }
-  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.autostart]);
+  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.autostart, S.update, S.notice]);
   if (key === lastKey) { tickTimes(); return; }
   lastKey = key;
   render();
+}
+
+function banners() {
+  let h = '';
+  if (S.notice) h += `<div class="notice" style="margin-bottom:16px">${esc(S.notice)}</div>`;
+  if (S.update && S.update.available) {
+    h += `<div class="update"><span><b>typehaus ${esc(S.update.version)}</b> is available on your server.</span>
+      <a class="btn primary" href="${esc(S.update.url)}" target="_blank" rel="noopener">Download update</a></div>`;
+  }
+  return h;
 }
 
 function header() {
@@ -72,6 +83,7 @@ function render() {
   const [title, sub] = HEADLINE[st.phase] || [st.phase, ''];
   const sub2 = st.phase === 'ok' || st.phase === 'syncing' || st.phase === 'error'
     ? `${plural(st.fonts, 'font file')} active · checked <span data-ago="${esc(st.last_sync)}">${ago(st.last_sync)}</span>` : sub;
+  const showDetail = st.detail && !['ok', 'suspended'].includes(st.phase);
 
   // group fonts by family
   const fams = new Map();
@@ -81,11 +93,11 @@ function render() {
     return { name, faces, rep };
   });
 
-  app.innerHTML = `${header()}
+  app.innerHTML = `${header()}${banners()}
     <section class="hero">
       <div class="light ${esc(st.phase)}" aria-hidden="true"></div>
       <div class="grow"><div class="t">${esc(title)}</div><div class="s">${sub2}</div>
-        ${st.detail && st.phase !== 'ok' ? `<div class="detail">${esc(st.detail)}</div>` : ''}</div>
+        ${showDetail ? `<div class="detail">${esc(st.detail)}</div>` : ''}</div>
       <button class="btn" id="sync" ${st.phase === 'syncing' ? 'disabled' : ''}>Sync now</button>
     </section>
 
@@ -152,10 +164,11 @@ function confirmDisconnect() {
 
 // ---- connect -------------------------------------------------------------
 function renderConnect(app) {
-  const last = (() => { try { return localStorage.getItem('typehaus.server') || ''; } catch { return ''; } })();
+  const last = S.last_server || '';
   app.innerHTML = `${header()}
     <form class="connect" id="connect" autocomplete="off">
       <p class="intro">Connect this computer to your team's typehaus to get the fonts you switch on in the library – installed for you, no admin rights needed.</p>
+      ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       <div id="notice"></div>
       <label>Server address
         <input name="server" type="text" inputmode="url" placeholder="fonts.example.com" value="${esc(last)}" required>
@@ -168,6 +181,11 @@ function renderConnect(app) {
         <input name="name" type="text" value="${esc(S.hostname)}">
         <span class="hint">How this computer appears in your device list.</span>
       </label>
+      <details class="adv"><summary>Advanced</summary>
+        <label>Custom certificate authority <span class="hint">Only needed if your server uses a private or self-signed certificate that this computer doesn't trust. Paste the CA certificate (PEM).</span>
+          <textarea name="ca" rows="5" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+        </label>
+      </details>
       <div id="err"></div>
       <div class="actions"><button class="btn primary" type="submit" id="go">Connect</button></div>
     </form>
@@ -188,8 +206,7 @@ function renderConnect(app) {
     let server = f.server.value.trim();
     if (!/^https?:\/\//i.test(server)) server = 'https://' + server;
     try {
-      await api('POST', '/api/enroll', { server, code: code.value, name: f.name.value.trim() });
-      try { localStorage.setItem('typehaus.server', server); } catch {}
+      await api('POST', '/api/enroll', { server, code: code.value, name: f.name.value.trim(), ca_pem: f.ca.value });
       lastKey = '';
       $('#app').innerHTML = '';
       await refresh();
@@ -204,6 +221,8 @@ function updateNotice() {
   const n = $('#notice');
   if (n) n.innerHTML = S.status.detail ? `<div class="notice">${esc(S.status.detail)}</div>` : '';
 }
+// (the server address is remembered by the agent itself – browser storage
+// would be lost because the window's port changes on every start)
 
 const timer = setInterval(refresh, 2000);
 refresh();

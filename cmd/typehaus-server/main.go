@@ -25,6 +25,18 @@ func main() {
 			return
 		case "healthcheck":
 			os.Exit(healthcheck())
+		case "reset-password":
+			if len(os.Args) != 3 {
+				fmt.Fprintln(os.Stderr, "usage: typehaus-server reset-password USERNAME")
+				os.Exit(2)
+			}
+			pw, err := server.ResetPassword(server.ConfigFromEnv(), os.Args[2])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("New password for %s: %s\n(the account is enabled and has admin rights; change the password after signing in)\n", os.Args[2], pw)
+			return
 		}
 	}
 	server.Version = version

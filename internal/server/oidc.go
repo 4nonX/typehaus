@@ -179,10 +179,13 @@ func (s *Server) upsertOIDCUser(sub string, claims map[string]any) (int64, error
 
 	if s.cfg.OIDCGroupsClaim != "" {
 		// Sync membership for groups that exist locally (matched by name).
-		s.db.Exec(`DELETE FROM user_groups WHERE user_id = ?`, id)
+		// Only memberships created by SSO are replaced; groups an admin
+		// assigned by hand stay.
+		s.db.Exec(`DELETE FROM user_groups WHERE user_id = ? AND source = 'oidc'`, id)
 		for _, g := range groups {
-			s.db.Exec(`INSERT OR IGNORE INTO user_groups (user_id, group_id) SELECT ?, id FROM groups WHERE name = ?`, id, g)
+			s.db.Exec(`INSERT OR IGNORE INTO user_groups (user_id, group_id, source) SELECT ?, id, 'oidc' FROM groups WHERE name = ?`, id, g)
 		}
+		s.pruneActivations()
 		if s.cfg.OIDCAdminGroup != "" {
 			isAdmin := false
 			for _, g := range groups {

@@ -211,3 +211,113 @@ func TestEndToEnd(t *testing.T) {
 func itoa(i int64) string { return string(jsonNum(i)) }
 
 func jsonNum(i int64) []byte { b, _ := json.Marshal(i); return b }
+
+func newTestServer(t *testing.T) (*Server, *httptest.Server, *client) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := Config{DataDir: dir, AdminUser: "admin", AdminPassword: "adminpassword", PollSeconds: 60,
+		LocalLogin: true, SessionHours: 1, MaxUploadMB: 64, AgentsDir: dir}
+	s, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(func() { ts.Close(); s.Close() })
+	admin := newClient(t, ts.URL)
+	if code := admin.do("POST", "/api/auth/login", map[string]string{"username": "admin", "password": "adminpassword"}, nil); code != 200 {
+		t.Fatalf("login: %d", code)
+	}
+	return s, ts, admin
+}
+
+func enrollDevice(t *testing.T, ts *httptest.Server, user *client) string {
+	t.Helper()
+	var code map[string]any
+	user.do("POST", "/api/enroll-codes", nil, &code)
+	var er protocol.EnrollResponse
+	if st := newClient(t, ts.URL).do("POST", "/api/agent/enroll", protocol.EnrollRequest{Code: code["code"].(string)}, &er); st != 201 {
+		t.Fatalf("enroll: %d", st)
+	}
+	return er.Token
+}
+
+func getManifest(t *testing.T, ts *httptest.Server, tok string) (int, protocol.Manifest) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", ts.URL+"/api/agent/manifest", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var m protocol.Manifest
+	json.NewDecoder(resp.Body).Decode(&m)
+	return resp.StatusCode, m
+}
+
+// Disabling a user suspends their devices (403, enrollment kept);
+// enabling them again restores the manifest.
+func TestSuspendResume(t *testing.T) {
+	name, data := testFont(t)
+	_, ts, admin := newTestServer(t)
+	ids := admin.upload(name, data)
+	var col, usr map[string]int64
+	admin.do("POST", "/api/collections", map[string]any{"name": "All", "everyone": true}, &col)
+	admin.do("POST", "/api/collections/"+itoa(col["id"])+"/fonts", map[string]any{"font_ids": ids}, nil)
+	admin.do("POST", "/api/users", map[string]any{"username": "carla", "password": "carlapassword"}, &usr)
+	carla := newClient(t, ts.URL)
+	carla.do("POST", "/api/auth/login", map[string]string{"username": "carla", "password": "carlapassword"}, nil)
+	carla.do("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
+	tok := enrollDevice(t, ts, carla)
+
+	admin.do("PATCH", "/api/users/"+itoa(usr["id"]), map[string]any{"disabled": true}, nil)
+	if st, _ := getManifest(t, ts, tok); st != 403 {
+		t.Fatalf("disabled user: want 403, got %d", st)
+	}
+	admin.do("PATCH", "/api/users/"+itoa(usr["id"]), map[string]any{"disabled": false}, nil)
+	st, m := getManifest(t, ts, tok)
+	if st != 200 || len(m.Fonts) != 1 || m.ServerVersion == "" {
+		t.Fatalf("re-enabled: %d %+v", st, m)
+	}
+}
+
+// Two files with the same PostScript name are never active together.
+func TestConflictResolution(t *testing.T) {
+	name, data := testFont(t)
+	_, ts, admin := newTestServer(t)
+	v1 := admin.upload(name, data)
+	// same font, different bytes (e.g. another version): trailing padding
+	v2 := admin.upload("v2-"+name, append(append([]byte{}, data...), 0, 0, 0, 0))
+	if v1[0] == v2[0] {
+		t.Fatal("expected a second font record")
+	}
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	for _, f := range fonts {
+		if !f.Conflict {
+			t.Errorf("font %d should be flagged as conflicting", f.ID)
+		}
+	}
+	var r map[string]int64
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": v1}, &r)
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": v2}, &r)
+	if r["replaced"] != 1 {
+		t.Fatalf("activating v2 should switch v1 off, got %+v", r)
+	}
+	tok := enrollDevice(t, ts, admin)
+	if _, m := getManifest(t, ts, tok); len(m.Fonts) != 1 || m.Fonts[0].ID != v2[0] {
+		t.Fatalf("manifest should contain only v2: %+v", m.Fonts)
+	}
+	// both requested at once: newest wins
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": []int64{v1[0], v2[0]}}, &r)
+	if _, m := getManifest(t, ts, tok); len(m.Fonts) != 1 || m.Fonts[0].ID != v2[0] {
+		t.Fatalf("manifest should contain only v2 after bulk activation: %+v", m.Fonts)
+	}
+}
+
+func TestSSOOnlyRequiresAdminGroup(t *testing.T) {
+	cfg := Config{DataDir: t.TempDir(), AdminUser: "admin", LocalLogin: false, SessionHours: 1}
+	if _, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("expected startup error without local login and without OIDC")
+	}
+}

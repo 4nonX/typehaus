@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -202,4 +203,30 @@ func (l *loginLimiter) reset(key string) {
 	l.mu.Lock()
 	delete(l.hits, key)
 	l.mu.Unlock()
+}
+
+// ResetPassword sets a new random password for username, enables the
+// account, grants admin rights and ends its sessions. Used for recovery from
+// the command line (docker exec … typehaus-server reset-password NAME).
+func ResetPassword(cfg Config, username string) (string, error) {
+	db, err := openDB(cfg.DataDir)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	pw := randomToken(12)
+	hash, err := hashPassword(pw)
+	if err != nil {
+		return "", err
+	}
+	res, err := db.Exec(`UPDATE users SET password_hash = ?, disabled = 0, is_admin = 1 WHERE username = ?`, hash, username)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", fmt.Errorf("no user named %q", username)
+	}
+	db.Exec(`DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE username = ?)`, username)
+	db.Exec(`INSERT INTO audit (ts, actor, action, detail) VALUES (?, 'system', 'password.reset', ?)`, now(), "reset from command line for "+username)
+	return pw, nil
 }

@@ -115,47 +115,6 @@ func LogPath() (string, error) {
 	return filepath.Join(d, "agent.log"), err
 }
 
-func uiURLPath() (string, error) {
-	d, err := ConfigDir()
-	return filepath.Join(d, "window.url"), err
-}
-
-// PublishWindowURL records the running agent's window URL (incl. its access
-// token) so a second launch can open it instead of starting another agent.
-func PublishWindowURL(u string) {
-	if p, err := uiURLPath(); err == nil {
-		os.WriteFile(p, []byte(u), 0o600)
-	}
-}
-
-// RunningWindowURL returns the window URL of a running agent, if any.
-func RunningWindowURL() string {
-	pp, err := pidPath()
-	if err != nil {
-		return ""
-	}
-	pid := readPID(pp)
-	if pid <= 0 || pid == os.Getpid() || !processAlive(pid) {
-		return ""
-	}
-	p, err := uiURLPath()
-	if err != nil {
-		return ""
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// ClearWindowURL removes the published URL on exit.
-func ClearWindowURL() {
-	if p, err := uiURLPath(); err == nil {
-		os.Remove(p)
-	}
-}
-
 func pidPath() (string, error) {
 	d, err := ConfigDir()
 	return filepath.Join(d, "agent.pid"), err
