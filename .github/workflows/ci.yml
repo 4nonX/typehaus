@@ -81,7 +81,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            dirs: C:\Windows\Fonts
+            dirs: C:/Windows/Fonts
           - os: macos-latest
             dirs: /System/Library/Fonts /Library/Fonts
           - os: ubuntu-latest
