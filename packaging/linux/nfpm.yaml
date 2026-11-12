@@ -1,0 +1,45 @@
+# Linux packages (deb, rpm) for the typehaus app.
+# Built by CI (packaging/linux/build.sh): the agent binary for ARCH is copied
+# to build/linux/typehaus first, then
+#   VERSION=0.3.1 ARCH=amd64 nfpm pkg -f packaging/linux/nfpm.yaml -p deb -t dist/typehaus-linux-amd64.deb
+name: typehaus
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: typehaus contributors <noreply@github.com>
+description: |
+  Font sync app for typehaus, the self-hosted font server.
+  Keeps the fonts you activate in your team's typehaus library installed
+  for your user account and removes them when they are switched off or
+  access is revoked. Lives in the system tray (StatusNotifier).
+vendor: typehaus contributors
+homepage: https://github.com/4nonX/typehaus
+license: AGPL-3.0-only
+depends:
+  - fontconfig
+contents:
+  - src: build/linux/typehaus
+    dst: /usr/bin/typehaus
+    file_info:
+      mode: 0755
+  - src: /usr/bin/typehaus
+    dst: /usr/bin/typehaus-agent
+    type: symlink
+  - src: packaging/linux/typehaus.desktop
+    dst: /usr/share/applications/typehaus.desktop
+  - src: packaging/macos/icon.iconset/icon_16x16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/typehaus.png
+  - src: packaging/macos/icon.iconset/icon_32x32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/typehaus.png
+  - src: packaging/macos/icon.iconset/icon_32x32@2x.png
+    dst: /usr/share/icons/hicolor/64x64/apps/typehaus.png
+  - src: packaging/macos/icon.iconset/icon_128x128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/typehaus.png
+  - src: packaging/macos/icon.iconset/icon_256x256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/typehaus.png
+  - src: packaging/macos/icon.iconset/icon_512x512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/typehaus.png
+scripts:
+  preremove: packaging/linux/preremove.sh

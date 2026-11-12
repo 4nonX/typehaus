@@ -151,3 +151,18 @@ func AutostartEnabled() bool {
 	_, err = os.Stat(p)
 	return err == nil
 }
+
+// installedProgram returns the executable of typehaus.app in an
+// Applications folder, or "".
+func installedProgram() string {
+	dirs := []string{"/Applications"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Applications"))
+	}
+	for _, d := range dirs {
+		if p := filepath.Join(d, "typehaus.app", "Contents", "MacOS", "typehaus-agent"); fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the macOS agent with menu-bar support (cgo) for arm64 and amd64,
-# a universal typehaus.app bundle, and zips everything into dist/agents.
+# a universal typehaus.app bundle, the installer disk image (typehaus-macos.dmg)
+# and zips everything into dist/agents.
 # Must run on macOS (Xcode command line tools). Usage: build-app.sh VERSION
 #
 # Signing and notarization switch on automatically when these variables are
@@ -86,5 +87,20 @@ fi
 
 rm -f "$OUT/typehaus-agent-darwin-universal.app.zip"
 ditto -c -k --keepParent "$APP" "$OUT/typehaus-agent-darwin-universal.app.zip"
+
+# ---- installer: disk image with drag-to-Applications ----------------------------
+DMG="$OUT/typehaus-macos.dmg"
+STAGE="$WORK/dmg"
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/typehaus.app"
+ln -s /Applications "$STAGE/Applications"
+rm -f "$DMG"
+hdiutil create -volname "typehaus" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+if [ "$SIGNED" = 1 ]; then
+  codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$DMG"
+fi
+if notarize "$DMG"; then
+  xcrun stapler staple "$DMG"
+fi
 [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
 ls -la "$OUT"

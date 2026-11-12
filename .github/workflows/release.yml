@@ -64,10 +64,70 @@ jobs:
       - name: Use signed binaries
         if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
         run: cp -v out/windows-signed/*.exe out/windows/
+      # Installer (NSIS), built from the signed programs – one setup for
+      # Intel/AMD and ARM (packaging/windows/typehaus.nsi)
+      - name: Build installer
+        run: |
+          set -e
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends nsis
+          V=$(git describe --tags --always); V=${V#v}
+          mkdir -p out/setup
+          makensis -V2 -DVERSION="$V" -DSRC="$PWD/out/windows" -DOUTFILE="$PWD/out/setup/typehaus-setup-windows.exe" packaging/windows/typehaus.nsi
+      - name: Upload unsigned installer
+        id: unsigned-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup-unsigned
+          path: out/setup/
+          retention-days: 3
+      - name: Sign installer with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: out/setup-signed
+      - name: Use signed installer
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        run: cp -v out/setup-signed/*.exe out/setup/
+      - run: cp -v out/setup/typehaus-setup-windows.exe out/windows/
       - uses: actions/upload-artifact@v4
         with:
           name: windows-agents
           path: out/windows/
+          retention-days: 7
+
+  # Linux programs and packages (deb, rpm: packaging/linux)
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          set -e
+          V=${GITHUB_REF_NAME}
+          [ "${GITHUB_REF_TYPE}" = tag ] || V=$(git describe --tags --always)
+          mkdir -p out/linux
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$V" \
+              -o out/linux/typehaus-agent-linux-$arch ./cmd/typehaus-agent
+          done
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0
+          NFPM="$(go env GOPATH)/bin/nfpm" packaging/linux/build.sh "$V" out/linux out/linux
+          ls -la out/linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-agents
+          path: out/linux/
           retention-days: 7
 
   # macOS menu-bar app: needs cgo, so it is built on macOS. Signed with a
@@ -103,13 +163,17 @@ jobs:
   # 1) image without the Mac app (the cross-compiled macOS command-line
   #    agent is included); replaced by the full image in macos-finish
   image:
-    needs: [windows]
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: windows-agents
+          path: dist/agents/
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-agents
           path: dist/agents/
       - uses: ./.github/actions/image
         with:
@@ -118,7 +182,7 @@ jobs:
   # 2) GitHub release with Windows, Linux and the servers
   binaries:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows]
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,13 +193,15 @@ jobs:
         with:
           name: windows-agents
           path: dist/
-      - name: Build Linux agents and servers
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-agents
+          path: dist/
+      - name: Build servers
         run: |
           set -e
           V=${GITHUB_REF_NAME}
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$V" \
-              -o dist/typehaus-agent-linux-$arch ./cmd/typehaus-agent
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$V" \
               -o dist/typehaus-server-linux-$arch ./cmd/typehaus-server
           done
@@ -178,6 +244,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: windows-agents
+          path: dist/agents/
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-agents
           path: dist/agents/
       - run: cp -v mac/typehaus-* dist/agents/
       - uses: ./.github/actions/image

@@ -179,3 +179,14 @@ func AutostartEnabled() bool {
 	}
 	return false
 }
+
+// installedProgram returns /usr/bin/typehaus when the deb/rpm package is
+// installed, or "".
+func installedProgram() string {
+	for _, p := range []string{"/usr/bin/typehaus", "/usr/local/bin/typehaus"} {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}

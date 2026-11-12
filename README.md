@@ -69,11 +69,20 @@ typehaus runs on each computer as a small tray / menu-bar app. The Docker image 
 
 **Getting started on a computer:**
 
-1. Download typehaus from the Devices page: `typehaus-agent-windows-amd64.exe`, `typehaus-agent-darwin-universal.app.zip` (unzip it and move `typehaus.app` to *Applications*), or `typehaus-agent-linux-amd64`.
-2. Open it. The **t.** icon appears in the taskbar or menu bar, and the typehaus window opens.
+1. Download the installer from the Devices page and install typehaus:
+   - **Windows:** `typehaus-setup-windows.exe` – installs for your user account without administrator rights (Intel/AMD and ARM), with a Start menu entry and an entry under *Settings → Apps*.
+   - **macOS:** `typehaus-macos.dmg` – drag typehaus to *Applications*.
+   - **Linux:** `typehaus-linux-amd64.deb` (Debian, Ubuntu, Mint…) or `.rpm` (Fedora, openSUSE…); ARM packages under *Other downloads*.
+2. Start typehaus. The **t.** icon appears in the taskbar or menu bar, and the typehaus window opens.
 3. In the web UI under **Devices → Create enrollment code**, copy the server address and code into the window and click **Connect**.
 
 That's it. Fonts you switch on in the library appear within a minute. *Start at login* is turned on automatically.
+
+**Updates** use the same installer: download the new version (the app shows *Update available*) and install it over the old one. typehaus is closed, updated and started again; your fonts stay installed. **Uninstalling** (Windows: *Settings → Apps*; macOS: move the app to the bin after *Disconnect* in its window; Linux: `typehaus unenroll`, then remove the package) removes the fonts typehaus installed.
+
+**Rolling out to many computers:** `typehaus-setup-windows.exe /S` installs silently (Intune, GPO, scripts) and `"%LOCALAPPDATA%\Programs\typehaus\uninstall.exe" /S` removes it. Each user then connects once with an enrollment code, or enroll from a script with `typehaus-agent enroll`.
+
+The standalone programs (`typehaus-agent-<os>-<arch>`, under *Other downloads*) need no installation – for servers, scripts and portable use.
 
 **The tray icon is the status light:**
 

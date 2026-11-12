@@ -6,6 +6,17 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Added
+- **Installers for every system.** typehaus is now installed like any other program instead of running from the downloaded file:
+  - **Windows:** `typehaus-setup-windows.exe`, one setup for Intel/AMD and ARM, in English or German. It installs for the current user without administrator rights to `%LOCALAPPDATA%\Programs\typehaus`, with a Start menu entry and an entry under *Settings → Apps* including an uninstaller. Updates close the running app, replace it and start it again. `/S` installs and uninstalls silently for Intune, GPO or scripts.
+  - **macOS:** `typehaus-macos.dmg` with drag-to-Applications, signed and notarized when the Apple credentials are configured.
+  - **Linux:** `.deb` and `.rpm` packages for amd64 and arm64: `/usr/bin/typehaus` (also as `typehaus-agent`), a menu entry and icons.
+  - The Devices page offers the installer for each system first; the standalone programs remain under *Other downloads*.
+  - Uninstalling removes the fonts typehaus installed and its autostart entry.
+  - *Start at login* always starts the installed program. The private copies older versions kept for autostart are removed.
+  - CI installs, updates and uninstalls on real Windows, Linux and macOS systems on every change, and runs the end-to-end test against the installed Linux package.
+- `typehaus-agent quit` quits the running app.
+
 ## [0.3.1] - 2026-11-12
 
 ### Fixed

@@ -592,7 +592,7 @@ async function renderDevices(page) {
       <div class="card">
         <h2 style="margin-top:0">Add a computer</h2>
         <ol class="small steps">
-          <li><b>Download typehaus</b> for your computer and open it.</li>
+          <li><b>Download typehaus</b> for your computer and install it.</li>
           <li>The <span class="tmark">t<i></i></span> icon appears in your taskbar or menu bar and asks for a server address and a code.</li>
           <li><b>Create a code</b> here and enter it. It works once and expires after 15 minutes.</li>
         </ol>
@@ -625,7 +625,29 @@ async function renderDevices(page) {
   const archL = { amd64: 'Intel/AMD', arm64: 'ARM', universal: '' };
   const primary = downloads.filter((d) => !d.headless && (d.os !== 'darwin' || d.app || !downloads.some((x) => x.app)));
   const guessOS = /Win/.test(navigator.platform) ? 'windows' : /Mac/.test(navigator.platform) ? 'darwin' : 'linux';
-  if (primary.length) {
+  const installers = downloads.filter((d) => d.installer);
+  if (installers.length) {
+    // one installer per system; ARM Linux packages and the standalone
+    // programs (servers, scripts) under "Other downloads"
+    const main = [
+      ['windows', 'exe', 'universal', 'Windows'], ['darwin', 'dmg', 'universal', 'macOS'],
+      ['linux', 'deb', 'amd64', 'Linux (.deb)'], ['linux', 'rpm', 'amd64', 'Linux (.rpm)'],
+    ].map(([os, fmt, arch, text]) => ({ d: installers.find((x) => x.os === os && x.format === fmt && x.arch === arch), os, text }))
+      .filter((x) => x.d);
+    main.sort((a, b) => (b.os === guessOS) - (a.os === guessOS));
+    const shown = new Set(main.map((x) => x.d.name));
+    const other = downloads.filter((d) => !shown.has(d.name) && !d.headless)
+      .sort((a, b) => (b.installer - a.installer) || a.name.localeCompare(b.name));
+    const otherLabel = (d) => {
+      if (d.installer) return `${label[d.os]} ${archL[d.arch] || d.arch} (.${d.format})`;
+      if (d.app) return 'macOS app (zip, no installer)';
+      return `${label[d.os] || d.os} ${archL[d.arch] || d.arch} – standalone program${d.headless ? ', no console window' : ''}`;
+    };
+    dl.innerHTML = main.map((x, i) => `<a class="btn sm ${i === 0 && x.os === guessOS ? 'primary' : ''}" href="${esc(x.d.url)}" download>${x.text}</a>`).join('')
+      + (other.length ? `<details class="otherdl"><summary class="small">Other downloads</summary><ul class="small">${other.map((d) =>
+        `<li><a href="${esc(d.url)}" download>${esc(otherLabel(d))}</a> <span class="muted">${esc(d.name)} · ${fmtSize(d.size)}</span></li>`).join('')}</ul>
+        <p class="small muted">The standalone programs need no installation – for servers, scripts and portable use.</p></details>` : '');
+  } else if (primary.length) {
     primary.sort((a, b) => (b.os === guessOS) - (a.os === guessOS));
     dl.innerHTML = primary.map((d) => `<a class="btn sm ${d.os === guessOS && (d.arch === 'amd64' || d.app || d.os === 'darwin') ? 'primary' : ''}" href="${esc(d.url)}" download>${label[d.os] || esc(d.os)}${archL[d.arch] !== undefined ? (archL[d.arch] ? ' ' + archL[d.arch] : '') : ' ' + esc(d.arch)}</a>`).join('');
   } else {
@@ -636,7 +658,15 @@ async function renderDevices(page) {
     try {
       const c = await api('POST', '/api/enroll-codes');
       const bin = { windows: '.\\typehaus-agent-windows-amd64.exe', darwin: './typehaus-agent-darwin-arm64', linux: './typehaus-agent-linux-amd64' };
-      const cmds = {
+      const inst = {
+        windows: '& "$env:LOCALAPPDATA\\Programs\\typehaus\\typehaus-agent.exe"',
+        darwin: '/Applications/typehaus.app/Contents/MacOS/typehaus-agent', linux: 'typehaus',
+      };
+      const cmds = installers.length ? {
+        windows: `# after installing typehaus (PowerShell)\n${inst.windows} enroll --server ${c.server} --code ${c.code}`,
+        darwin: `# after installing typehaus\n${inst.darwin} enroll --server ${c.server} --code ${c.code}`,
+        linux: `# after installing the typehaus package\n${inst.linux} enroll --server ${c.server} --code ${c.code}\n${inst.linux} autostart enable`,
+      } : {
         windows: `${bin.windows} enroll --server ${c.server} --code ${c.code}\n${bin.windows} autostart enable`,
         darwin: `chmod +x typehaus-agent-darwin-arm64\nxattr -d com.apple.quarantine typehaus-agent-darwin-arm64 2>/dev/null\n${bin.darwin} enroll --server ${c.server} --code ${c.code}\n${bin.darwin} autostart enable`,
         linux: `chmod +x typehaus-agent-linux-amd64\n${bin.linux} enroll --server ${c.server} --code ${c.code}\n${bin.linux} autostart enable`,
@@ -650,7 +680,7 @@ async function renderDevices(page) {
         <details class="cli"><summary class="small">Prefer the command line?</summary>
           <div class="tabs">${['windows', 'darwin', 'linux'].map((o) => `<button data-os="${o}">${label[o]}</button>`).join('')}</div>
           <div class="code" id="cmd"></div>
-          <div class="row" style="margin-top:8px"><button class="btn sm" id="copy">Copy commands</button><span class="small muted">Adjust the file name for your architecture.</span></div>
+          <div class="row" style="margin-top:8px"><button class="btn sm" id="copy">Copy commands</button><span class="small muted">${installers.length ? 'Quit the typehaus app first.' : 'Adjust the file name for your architecture.'}</span></div>
         </details>`;
       const show = (o) => { $('#cmd', box).textContent = cmds[o]; $$('.tabs button', box).forEach((b) => b.classList.toggle('active', b.dataset.os === o)); };
       $$('.tabs button', box).forEach((b) => b.onclick = () => show(b.dataset.os));

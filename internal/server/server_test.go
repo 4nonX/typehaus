@@ -482,3 +482,38 @@ func TestAgentVersionFromEveryRequest(t *testing.T) {
 		t.Fatalf("foreign client changed the version: %q", v)
 	}
 }
+
+func TestDownloadList(t *testing.T) {
+	s, ts, _ := newTestServer(t)
+	for _, n := range []string{"typehaus-setup-windows.exe", "typehaus-macos.dmg", "typehaus-linux-amd64.deb", "typehaus-linux-arm64.rpm",
+		"typehaus-agent-linux-amd64", "typehaus-agentw-windows-amd64.exe", "typehaus-agent-darwin-universal.app.zip", "evil.sh", "typehaus-linux-x86.deb"} {
+		os.WriteFile(filepath.Join(s.cfg.AgentsDir, n), []byte("x"), 0o644)
+	}
+	var got []download
+	newClient(t, ts.URL).do("GET", "/api/downloads", nil, &got)
+	byName := map[string]download{}
+	for _, d := range got {
+		byName[d.Name] = d
+	}
+	if len(got) != 7 {
+		t.Fatalf("want 7 downloads, got %d: %+v", len(got), got)
+	}
+	check := func(name, os, arch, format string, installer bool) {
+		d := byName[name]
+		if d.OS != os || d.Arch != arch || d.Format != format || d.Installer != installer {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	check("typehaus-setup-windows.exe", "windows", "universal", "exe", true)
+	check("typehaus-macos.dmg", "darwin", "universal", "dmg", true)
+	check("typehaus-linux-amd64.deb", "linux", "amd64", "deb", true)
+	check("typehaus-linux-arm64.rpm", "linux", "arm64", "rpm", true)
+	check("typehaus-agent-linux-amd64", "linux", "amd64", "", false)
+	check("typehaus-agent-darwin-universal.app.zip", "darwin", "universal", "zip", false)
+	if st, _, _ := newClient(t, ts.URL).get("/downloads/typehaus-macos.dmg"); st != 200 {
+		t.Fatalf("download dmg: %d", st)
+	}
+	if st, _, _ := newClient(t, ts.URL).get("/downloads/evil.sh"); st != 404 {
+		t.Fatalf("unlisted file served: %d", st)
+	}
+}

@@ -14,6 +14,12 @@ import (
 // windowless variant) into a stable per-user location and returns the path
 // that autostart should launch.
 func installBinary() (string, error) {
+	// Installed with the typehaus installer or package: start that program,
+	// keep no private copy.
+	if p := installedProgram(); p != "" {
+		removePrivateCopies()
+		return p, nil
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -55,6 +61,25 @@ func installBinary() (string, error) {
 		return install(headless, "typehaus-agentw.exe")
 	}
 	return launched, nil
+}
+
+// removePrivateCopies deletes the copies older versions kept in the config
+// directory for autostart (before typehaus had installers).
+func removePrivateCopies() {
+	dir, err := binDir()
+	if err != nil {
+		return
+	}
+	self, _ := os.Executable()
+	if self != "" && strings.HasPrefix(self, dir+string(filepath.Separator)) {
+		return // still running from there – next time
+	}
+	os.RemoveAll(dir)
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 func sameFile(a, b string) bool {

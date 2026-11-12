@@ -66,6 +66,17 @@ jobs:
           unzip -q dist/agents/typehaus-agent-darwin-universal.app.zip -d /tmp/app
           lipo -info /tmp/app/typehaus.app/Contents/MacOS/typehaus-agent
           codesign --verify --verbose /tmp/app/typehaus.app
+      - name: Installer disk image
+        run: |
+          set -e
+          hdiutil attach dist/agents/typehaus-macos.dmg -nobrowse -readonly -mountpoint /tmp/thdmg
+          test -d /tmp/thdmg/typehaus.app
+          test "$(readlink /tmp/thdmg/Applications)" = /Applications
+          codesign --verify --deep --strict --verbose=2 /tmp/thdmg/typehaus.app
+          mkdir -p ~/Applications
+          ditto /tmp/thdmg/typehaus.app ~/Applications/typehaus.app
+          hdiutil detach /tmp/thdmg
+          ~/Applications/typehaus.app/Contents/MacOS/typehaus-agent version
 
   e2e:
     name: e2e (${{ matrix.os }})
@@ -89,6 +100,26 @@ jobs:
           go build -o "bin/typehaus-server$ext" ./cmd/typehaus-server
           go build -o "bin/typehaus-agent$ext" ./cmd/typehaus-agent
           go build -o "bin/e2e$ext" ./tools/e2e
+      - name: Windows installer (install, update, uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path "$nsis\makensis.exe")) {
+            choco install nsis -y --no-progress | Out-Null
+          }
+          $env:PATH += ";$nsis"
+          New-Item -ItemType Directory -Force out/win, dist | Out-Null
+          $env:CGO_ENABLED = '0'; $env:GOOS = 'windows'
+          foreach ($arch in 'amd64', 'arm64') {
+            $env:GOARCH = $arch
+            go build -ldflags "-X main.version=v0.0.0-ci" -o "out/win/typehaus-agent-windows-$arch.exe" ./cmd/typehaus-agent
+            go build -ldflags "-H=windowsgui -X main.version=v0.0.0-ci" -o "out/win/typehaus-agentw-windows-$arch.exe" ./cmd/typehaus-agent
+          }
+          Remove-Item Env:GOARCH
+          makensis -V2 -DVERSION=0.0.0-ci "-DSRC=$PWD\out\win" "-DOUTFILE=$PWD\dist\typehaus-setup-windows.exe" packaging\windows\typehaus.nsi
+          if ($LASTEXITCODE) { exit 1 }
+          pwsh packaging/windows/test-installer.ps1 dist\typehaus-setup-windows.exe
       - name: Pick test fonts (every format this OS handles)
         id: fonts
         shell: bash
@@ -110,6 +141,27 @@ jobs:
       - name: End-to-end test (install, removal, revocation)
         if: runner.os != 'Windows'
         run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font "${{ steps.fonts.outputs.list }}"
+      - name: Linux packages (install, end-to-end test with the installed program, remove)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          mkdir -p out/linux
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOARCH=$arch go build -ldflags "-X main.version=v0.0.0-ci" -o out/linux/typehaus-agent-linux-$arch ./cmd/typehaus-agent
+          done
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0
+          NFPM="$(go env GOPATH)/bin/nfpm" packaging/linux/build.sh v0.0.0-ci out/linux dist
+          sudo apt-get install -y --no-install-recommends desktop-file-utils >/dev/null
+          sudo dpkg -i dist/typehaus-linux-amd64.deb
+          typehaus version
+          typehaus-agent version
+          desktop-file-validate /usr/share/applications/typehaus.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/typehaus.png
+          bin/e2e -server bin/typehaus-server -agent /usr/bin/typehaus -font "${{ steps.fonts.outputs.list }}"
+          sudo dpkg -r typehaus
+          ! test -e /usr/bin/typehaus
+          ! test -e /usr/share/applications/typehaus.desktop
+          echo "Linux package: OK"
       - name: End-to-end test incl. all-users service (Windows, admin)
         if: runner.os == 'Windows'
         run: bin\e2e.exe -server bin\typehaus-server.exe -agent bin\typehaus-agent.exe -font "${{ steps.fonts.outputs.list }}" -machine

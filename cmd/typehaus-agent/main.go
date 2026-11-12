@@ -46,6 +46,8 @@ Usage:
   typehaus-agent unenroll
       Remove all fonts installed by typehaus, disable autostart and forget
       this enrollment.
+  typehaus-agent quit
+      Quit the running typehaus app (used by the installers).
 
 Windows, for all users of this computer (administrator rights required):
   typehaus-agent machine enroll --server URL --code CODE [--name NAME] [--ca-file FILE]
@@ -90,6 +92,12 @@ func main() {
 		err = cmdAutostart(os.Args[2:])
 	case "unenroll":
 		err = cmdUnenroll()
+	case "quit":
+		// used by the installers: stop the running app before replacing it
+		if in := agent.RunningInstance(); in != nil {
+			in.Replace()
+		}
+		agent.StopRunning()
 	case "machine":
 		err = cmdMachine(ctx, os.Args[2:])
 	case "version", "--version", "-v":

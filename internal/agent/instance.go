@@ -116,8 +116,12 @@ func RefreshAutostart() {
 		return
 	}
 	self, _ = filepath.EvalSymlinks(self)
-	if dir, err := binDir(); err == nil && strings.HasPrefix(self, dir+string(filepath.Separator)) {
-		return // we are the installed copy
+	if p := installedProgram(); p != "" {
+		if sameFile(self, p) {
+			return // we are the installed program
+		}
+	} else if dir, err := binDir(); err == nil && strings.HasPrefix(self, dir+string(filepath.Separator)) {
+		return // we are the autostart copy
 	}
 	EnableAutostart("tray", false)
 }

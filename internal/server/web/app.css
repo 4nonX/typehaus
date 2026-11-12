@@ -242,3 +242,6 @@ details.cli summary { cursor: pointer; color: var(--ink-2); margin-bottom: 10px;
 .nowrap { white-space: nowrap; }
 .iconbtn { background: none; border: 1px solid transparent; border-radius: 6px; width: 28px; height: 28px; cursor: pointer; color: var(--ink-3); font-size: 15px; }
 .iconbtn:hover { color: var(--ink); border-color: var(--rule); background: var(--paper-2); }
+details.otherdl { flex-basis: 100%; margin-top: 4px; }
+details.otherdl summary { cursor: pointer; color: var(--ink-2); }
+details.otherdl ul { margin: 6px 0; padding-left: 18px; line-height: 1.8; }

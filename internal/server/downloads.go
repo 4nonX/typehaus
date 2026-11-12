@@ -9,16 +9,22 @@ import (
 	"strings"
 )
 
-var downloadName = regexp.MustCompile(`^typehaus-agent[a-z0-9_.-]*$`)
+// Agent programs (typehaus-agent…) and the installers: typehaus-setup-windows.exe,
+// typehaus-macos.dmg, typehaus-linux-<arch>.deb / .rpm
+var downloadName = regexp.MustCompile(`^(typehaus-agent[a-z0-9_.-]*|typehaus-setup-windows\.exe|typehaus-macos\.dmg|typehaus-linux-(amd64|arm64)\.(deb|rpm))$`)
+
+var installerName = regexp.MustCompile(`^typehaus-(setup-windows\.exe|macos\.dmg|linux-(amd64|arm64)\.(deb|rpm))$`)
 
 type download struct {
-	Name     string `json:"name"`
-	OS       string `json:"os"`
-	Arch     string `json:"arch"`
-	Size     int64  `json:"size"`
-	URL      string `json:"url"`
-	Headless bool   `json:"headless"`
-	App      bool   `json:"app"` // macOS .app bundle (zip)
+	Name      string `json:"name"`
+	OS        string `json:"os"`
+	Arch      string `json:"arch"`
+	Size      int64  `json:"size"`
+	URL       string `json:"url"`
+	Headless  bool   `json:"headless"`
+	App       bool   `json:"app"`       // macOS .app bundle (zip)
+	Installer bool   `json:"installer"` // setup.exe, .dmg, .deb, .rpm
+	Format    string `json:"format"`    // exe, dmg, deb, rpm, zip, "" (program)
 }
 
 // handleListDownloads lists agent binaries named
@@ -36,6 +42,19 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
+			if m := installerName.FindStringSubmatch(e.Name()); m != nil {
+				d := download{Name: e.Name(), Size: info.Size(), URL: "/downloads/" + e.Name(), Installer: true}
+				switch {
+				case strings.HasPrefix(m[1], "setup-windows"):
+					d.OS, d.Arch, d.Format = "windows", "universal", "exe"
+				case strings.HasPrefix(m[1], "macos"):
+					d.OS, d.Arch, d.Format = "darwin", "universal", "dmg"
+				default:
+					d.OS, d.Arch, d.Format = "linux", m[2], m[3]
+				}
+				out = append(out, d)
+				continue
+			}
 			base := strings.TrimSuffix(e.Name(), ".exe")
 			base = strings.TrimSuffix(base, ".zip")
 			isApp := strings.HasSuffix(base, ".app")
@@ -44,9 +63,13 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 			if len(parts) < 4 {
 				continue
 			}
+			format := ""
+			if isApp {
+				format = "zip"
+			}
 			out = append(out, download{
 				Name: e.Name(), OS: parts[len(parts)-2], Arch: parts[len(parts)-1], Size: info.Size(),
-				URL: "/downloads/" + e.Name(), Headless: strings.HasPrefix(e.Name(), "typehaus-agentw"), App: isApp,
+				URL: "/downloads/" + e.Name(), Headless: strings.HasPrefix(e.Name(), "typehaus-agentw"), App: isApp, Format: format,
 			})
 		}
 	}

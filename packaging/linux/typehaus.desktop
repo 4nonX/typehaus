@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=typehaus
+GenericName=Font manager
+GenericName[de]=Schriftverwaltung
+Comment=Keeps the fonts from your team's typehaus library installed
+Comment[de]=Hält die Schriften aus der typehaus-Bibliothek Ihres Teams installiert
+Exec=typehaus tray
+Icon=typehaus
+Terminal=false
+Categories=Utility;
+Keywords=fonts;typefaces;font manager;Schriften;
+StartupNotify=false

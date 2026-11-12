@@ -5,6 +5,7 @@ package agent
 import (
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -81,4 +82,27 @@ func AutostartEnabled() bool {
 		}
 	}
 	return false
+}
+
+// uninstallKey is where the typehaus installer registers itself (Apps).
+const uninstallKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\typehaus`
+
+// installedProgram returns the installed typehaus.exe (per-user installer,
+// or a machine-wide one), or "" when typehaus is not installed.
+func installedProgram() string {
+	for _, root := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
+		k, err := registry.OpenKey(root, uninstallKey, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		loc, _, err := k.GetStringValue("InstallLocation")
+		k.Close()
+		if err != nil || loc == "" {
+			continue
+		}
+		if p := filepath.Join(loc, "typehaus.exe"); fileExists(p) {
+			return p
+		}
+	}
+	return ""
 }

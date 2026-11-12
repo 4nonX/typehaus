@@ -5,3 +5,5 @@
 *.db-*
 .DS_Store
 /bin/
+/out/
+/build/
