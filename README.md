@@ -16,6 +16,7 @@ typehaus does the core of it, free:
 - **Collections & groups.** Decide who sees what. "Brand fonts" for everyone, the licensed display family for the design group only.
 - **Activate from the browser.** Toggle a family or a single style. Every computer you enrolled installs it within a minute and removes it when you turn it off.
 - **No admin rights.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux.
+- **Or download the files.** Prefer the traditional way? Download a single style, a whole family or a selection (ZIP, with Type 1 metrics files and the license documents) and install it yourself. Licenses can forbid this; enforced licenses only allow downloads to people holding a seat. `TYPEHAUS_DOWNLOADS=false` turns it off for everyone but admins.
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
 - **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
 - **Activity log.** Uploads, activations, enrollments, sign-ins and admin changes.
@@ -160,6 +161,7 @@ All settings are environment variables.
 | `TYPEHAUS_SESSION_HOURS` | `168` | Web session lifetime |
 | `TYPEHAUS_POLL_SECONDS` | `60` | How often agents check for changes (min. 10) |
 | `TYPEHAUS_MAX_UPLOAD_MB` | `512` | Max size of one upload request |
+| `TYPEHAUS_DOWNLOADS` | `true` | Let users download font files directly (admins always can). Per-license setting on top. Downloaded fonts are outside typehaus' control: they aren't removed on revocation. |
 | `TYPEHAUS_LOCAL_LOGIN` | `true` | Set `false` to allow SSO only (requires `TYPEHAUS_OIDC_GROUPS_CLAIM` and `TYPEHAUS_OIDC_ADMIN_GROUP`) |
 | `TYPEHAUS_AGENTS_DIR` | `/app/agents` (image) | Agent binaries offered on the Devices page |
 

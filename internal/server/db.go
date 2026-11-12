@@ -167,6 +167,8 @@ CREATE TABLE license_documents (
 CREATE INDEX license_documents_license ON license_documents(license_id);
 CREATE INDEX fonts_license ON fonts(license_id);
 `,
+	// 5: whether a license allows downloading the font files directly
+	`ALTER TABLE licenses ADD COLUMN downloadable INTEGER NOT NULL DEFAULT 1;`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

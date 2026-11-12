@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -176,12 +175,12 @@ func (s *Server) handleFontFile(w http.ResponseWriter, r *http.Request, u *authU
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
+	if r.URL.Query().Get("download") == "1" {
+		s.serveDownload(w, u, []int64{id}) // license rules apply
+		return
+	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
-	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
-		s.audit(u, "font.download", "%s (%s)", name, sha[:12])
-	}
 	http.ServeFile(w, r, s.blobPath(sha))
 }
 

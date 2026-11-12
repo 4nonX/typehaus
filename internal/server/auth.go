@@ -118,6 +118,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *authUser) {
 	writeJSON(w, 200, map[string]any{
 		"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 		"is_admin": u.IsAdmin, "has_password": u.HasPassword, "version": Version,
+		"downloads": u.IsAdmin || s.cfg.Downloads,
 	})
 }
 

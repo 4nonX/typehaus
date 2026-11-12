@@ -135,7 +135,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .specimen.loading { opacity: .25; }
 .specimen.nopreview { font: italic 15px var(--serif); color: var(--ink-3); }
 .styles { margin: 12px 0 0 28px; display: grid; gap: 2px; }
-.style-row { display: grid; grid-template-columns: 24px 170px 1fr 46px; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--rule); }
+.style-row { display: grid; grid-template-columns: 24px 170px 1fr 28px 46px; gap: 12px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--rule); }
 .style-row .sname { font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .style-row .specimen { margin: 0; font-size: 26px; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
@@ -235,3 +235,5 @@ details.cli { margin-top: 14px; }
 details.cli summary { cursor: pointer; color: var(--ink-2); margin-bottom: 10px; }
 .more { padding: 30px; text-align: center; color: var(--ink-3); font-size: 13px; }
 .nowrap { white-space: nowrap; }
+.iconbtn { background: none; border: 1px solid transparent; border-radius: 6px; width: 28px; height: 28px; cursor: pointer; color: var(--ink-3); font-size: 15px; }
+.iconbtn:hover { color: var(--ink); border-color: var(--rule); background: var(--paper-2); }

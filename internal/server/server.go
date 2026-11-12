@@ -54,6 +54,9 @@ type Config struct {
 
 	// AgentsDir holds prebuilt agent binaries offered for download.
 	AgentsDir string
+
+	// Downloads lets users download font files directly (admins always can).
+	Downloads bool
 }
 
 // ConfigFromEnv builds a Config from TYPEHAUS_* variables.
@@ -77,6 +80,7 @@ func ConfigFromEnv() Config {
 		OIDCAdminGroup:   os.Getenv("TYPEHAUS_OIDC_ADMIN_GROUP"),
 		OIDCAutoCreate:   envBool("TYPEHAUS_OIDC_AUTO_CREATE", true),
 		AgentsDir:        env("TYPEHAUS_AGENTS_DIR", "./agents"),
+		Downloads:        envBool("TYPEHAUS_DOWNLOADS", true),
 	}
 	c.SecureCookies = envBool("TYPEHAUS_SECURE_COOKIES", strings.HasPrefix(c.BaseURL, "https://"))
 	if c.PollSeconds < 10 {
@@ -217,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 
 	// fonts
 	mux.Handle("GET /api/fonts", s.user(s.handleListFonts))
+	mux.Handle("GET /api/fonts/download", s.user(s.handleDownloadFonts))
 	mux.Handle("GET /api/fonts/{id}", s.user(s.handleGetFont))
 	mux.Handle("GET /api/fonts/{id}/file", s.user(s.handleFontFile))
 	mux.Handle("POST /api/fonts", s.admin(s.handleUpload))

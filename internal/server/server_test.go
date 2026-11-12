@@ -96,7 +96,7 @@ func TestEndToEnd(t *testing.T) {
 	name, data := testFont(t)
 	dir := t.TempDir()
 	cfg := Config{DataDir: dir, AdminUser: "admin", AdminPassword: "adminpassword", PollSeconds: 60,
-		LocalLogin: true, SessionHours: 1, MaxUploadMB: 64, AgentsDir: dir}
+		LocalLogin: true, SessionHours: 1, MaxUploadMB: 64, AgentsDir: dir, Downloads: true}
 	s, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server, *client) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := Config{DataDir: dir, AdminUser: "admin", AdminPassword: "adminpassword", PollSeconds: 60,
-		LocalLogin: true, SessionHours: 1, MaxUploadMB: 64, AgentsDir: dir}
+		LocalLogin: true, SessionHours: 1, MaxUploadMB: 64, AgentsDir: dir, Downloads: true}
 	s, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

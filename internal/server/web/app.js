@@ -351,6 +351,7 @@ function drawFamilies() {
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand info" title="Details and license">Info</button>
+        ${S.me.downloads ? `<button class="expand dl" title="Download ${fam.faces.length > 1 ? 'all styles as ZIP' : 'the font file'} to install it yourself">Download</button>` : ''}
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
       </div>
       <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(fam.name)}" style="font-size:${L.size}px">${esc(L.preview || fam.name)}</div>
@@ -359,6 +360,7 @@ function drawFamilies() {
           ${admin ? `<input type="checkbox" class="selface" ${L.selected.has(f.id) ? 'checked' : ''}>` : '<span></span>'}
           <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
           <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
+          ${S.me.downloads ? `<button class="iconbtn dlface" title="Download ${esc(f.style)}" aria-label="Download ${esc(f.full_name)}">↓</button>` : '<span></span>'}
           <label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>
         </div>`).join('')}</div>` : ''}
     </div>`;
@@ -379,7 +381,9 @@ function drawFamilies() {
   });
   $$('.actface', box).forEach((cb) => cb.onchange = () => setActive([+cb.closest('.style-row').dataset.id], cb.checked));
   $$('.info', box).forEach((b) => b.onclick = () => familyInfo(fams.find((x) => x.name === b.closest('.family').dataset.fam)));
-  $$('.expand:not(.info)', box).forEach((b) => b.onclick = () => {
+  $$('.dl', box).forEach((b) => b.onclick = () => downloadFonts(fams.find((x) => x.name === b.closest('.family').dataset.fam).faces.map((f) => f.id)));
+  $$('.dlface', box).forEach((b) => b.onclick = () => downloadFonts([+b.closest('.style-row').dataset.id]));
+  $$('.expand:not(.info):not(.dl)', box).forEach((b) => b.onclick = () => {
     const n = b.closest('.family').dataset.fam;
     L.expanded.has(n) ? L.expanded.delete(n) : L.expanded.add(n);
     drawFamilies();
@@ -414,6 +418,34 @@ async function setActive(ids, on) {
   }
 }
 
+// Direct download (single file, or a ZIP for families and Type 1 fonts).
+async function downloadFonts(ids) {
+  try {
+    const r = await fetch(`/api/fonts/download?ids=${ids.join(',')}`, { credentials: 'same-origin' });
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).error || msg; } catch {}
+      throw new Error(msg);
+    }
+    const skipped = r.headers.get('X-Typehaus-Skipped');
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename\*=utf-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+    const name = m ? decodeURIComponent(m[1]) : 'fonts.zip';
+    const url = URL.createObjectURL(await r.blob());
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    if (skipped) toast(`Some fonts were left out: ${decodeMime(skipped)}`, true);
+  } catch (e) { fail(e); }
+}
+// RFC 2047 "=?utf-8?q?…?=" (used for the skipped-fonts header)
+function decodeMime(s) {
+  return s.replace(/\?=\s+=\?utf-8\?q\?/gi, '').replace(/=\?utf-8\?q\?(.*?)\?=/gi, (_, q) => {
+    const bytes = q.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (__, h) => String.fromCharCode(parseInt(h, 16)));
+    try { return decodeURIComponent(escape(bytes)); } catch { return bytes; }
+  });
+}
+
 function drawBulk() {
   const L = S.lib;
   const box = $('#bulk');
@@ -426,12 +458,14 @@ function drawBulk() {
     <select id="b-coll"><option value="">Add to collection…</option>${L.collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
     ${inColl ? '<button class="btn sm" id="b-rm">Remove from this collection</button>' : ''}
     <select id="b-lic"><option value="">Assign license…</option><option value="0">— No license —</option>${L.licenses.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
+    <button class="btn sm" id="b-dl">Download</button>
     <button class="btn sm" id="b-del">Delete</button>
     <span class="spacer"></span>
     <button class="btn sm" id="b-clear">Clear selection</button></div>`;
   const ids = [...L.selected];
   const reload = async (msg) => { toast(msg); L.loaded = false; await renderLibrary($('#page')); };
   $('#b-clear').onclick = () => { L.selected.clear(); drawFamilies(); };
+  $('#b-dl').onclick = () => downloadFonts(ids);
   $('#b-coll').onchange = async (e) => {
     if (!e.target.value) return;
     try { await api('POST', `/api/collections/${e.target.value}/fonts`, { font_ids: ids }); await reload('Added to collection'); } catch (ex) { fail(ex); }
@@ -801,6 +835,7 @@ function licenseCard(l) {
     ${l.vendor ? `<div class="small muted">${esc(l.vendor)}</div>` : ''}
     <dl class="kv2">
       <dt>Allowed use</dt><dd>${l.rights.length ? `<div class="chips">${l.rights.map((r) => `<span class="chip">${esc(RIGHTS[r] || r)}</span>`).join('')}</div>` : '<span class="muted">Not recorded – check the license terms</span>'}</dd>
+      <dt>Download</dt><dd>${l.downloadable ? 'Font files may be downloaded directly' : 'Only through the typehaus app – no direct download'}</dd>
       <dt>Seats</dt><dd>${seatText(l)}${l.holder ? ' <span class="muted small">· you hold one</span>' : ''}</dd>
       <dt>Term</dt><dd>${termText(l)}${l.purchased_on ? ` <span class="muted small">· purchased ${esc(l.purchased_on)}</span>` : ''}</dd>
       ${l.reference ? `<dt>Reference</dt><dd>${esc(l.reference)}</dd>` : ''}
@@ -943,6 +978,8 @@ function editLicense(l, done) {
       <label class="field">Purchased<input type="date" name="purchased_on" value="${esc(l?.purchased_on)}"></label>
       <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
     </div>
+    <label class="check"><input type="checkbox" name="downloadable" ${!l || l.downloadable ? 'checked' : ''}>
+      <span><b>Allow direct download</b> – users may download the font files to install them themselves. Off: fonts are only installed through the typehaus app, which tracks every seat.</span></label>
     <label class="check"><input type="checkbox" name="enforce" ${l?.enforce ? 'checked' : ''}>
       <span><b>Enforce</b> – refuse activations when all seats are taken and remove the fonts from computers when the license has expired. Off: typehaus only warns.</span></label>
     <div class="two">
@@ -956,7 +993,7 @@ function editLicense(l, done) {
     onSubmit: async (fd) => {
       const body = {
         name: fd.get('name'), kind: fd.get('kind'), vendor: fd.get('vendor'), rights: fd.getAll('rights'),
-        seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on',
+        seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on', downloadable: fd.get('downloadable') === 'on',
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
         reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),
       };

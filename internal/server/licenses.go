@@ -44,6 +44,7 @@ type licenseRow struct {
 	Seats       int          `json:"seats"`     // 0 = unlimited
 	SeatUnit    string       `json:"seat_unit"` // users | devices
 	Enforce     bool         `json:"enforce"`
+	Download    bool         `json:"downloadable"`
 	Reference   string       `json:"reference,omitempty"` // admins only
 	URL         string       `json:"url"`
 	PurchasedOn string       `json:"purchased_on"`
@@ -96,7 +97,7 @@ func expiry(expiresOn string, at time.Time) (expired bool, daysLeft *int) {
 	return false, &d
 }
 
-const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce,
+const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable,
 	l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
 	(SELECT COUNT(DISTINCT f.family) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
@@ -120,7 +121,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	for rows.Next() {
 		l := &licenseRow{Documents: []licenseDoc{}}
 		var rights string
-		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce,
+		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download,
 			&l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
 			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Holder); err != nil {
 			rows.Close()
@@ -162,6 +163,13 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 		}
 	}
 	return out, nil
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
 
 func splitList(s string) []string {
@@ -271,6 +279,7 @@ type licenseReq struct {
 	Seats       *int      `json:"seats"`
 	SeatUnit    *string   `json:"seat_unit"`
 	Enforce     *bool     `json:"enforce"`
+	Download    *bool     `json:"downloadable"`
 	Reference   *string   `json:"reference"`
 	URL         *string   `json:"url"`
 	PurchasedOn *string   `json:"purchased_on"`
@@ -314,6 +323,9 @@ func (req *licenseReq) columns() (map[string]any, error) {
 	}
 	if req.Enforce != nil {
 		c["enforce"] = boolInt(*req.Enforce)
+	}
+	if req.Download != nil {
+		c["downloadable"] = boolInt(*req.Download)
 	}
 	if req.Rights != nil {
 		var keep []string
@@ -918,7 +930,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Status", "Enforced",
-		"Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "Terms URL", "Documents"})
+		"Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
 		if l.Seats > 0 {
@@ -933,7 +945,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 			enforced = "yes"
 		}
 		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used),
-			l.status(), enforced, l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
+			l.status(), enforced, yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
 			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), l.URL, strings.Join(docs, "; ")})
 	}
 	if unassigned > 0 {

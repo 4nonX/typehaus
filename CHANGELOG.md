@@ -22,6 +22,7 @@ The section matching a release tag becomes that release's notes on GitHub.
   - Optional enforcement per license: activations beyond the purchased seats are refused, per-device licenses are installed on at most that many computers, and after expiry the fonts are removed from all computers. Without enforcement typehaus only warns.
   - The Licenses page shows seat usage, terms, expiring (30 days) and over-used licenses, and who holds a seat; the menu marks licenses that need attention. *Export CSV* creates a compliance report.
   - Everyone sees a family's license, allowed use, terms and shared documents under *Info* in the library, together with the embedding permission and the license text stored in the font itself.
+- **Direct downloads** for installing fonts the traditional way: a single style as its font file, a family or a selection as a ZIP (one folder per family, Type 1 fonts with their `.pfm`/`.afm`, the font's license text and the license's shared documents). Licenses can forbid direct downloads; enforced licenses allow them only to people holding a seat, and not after expiry. `TYPEHAUS_DOWNLOADS=false` switches downloads off for everyone except admins. Every download is logged.
 - Drag and drop whole font folders; large uploads are sent in batches.
 - CI imports the complete system font folders of Windows, macOS and Linux on every change, and installs real `.fon`, Type 1, PCF and WOFF2 fonts end to end on all three systems.
 
