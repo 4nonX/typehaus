@@ -1,0 +1,6 @@
+/data/
+/dist/
+/agents/
+*.db
+*.db-*
+.DS_Store

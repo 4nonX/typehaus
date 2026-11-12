@@ -1,0 +1,475 @@
+package server
+
+import (
+	"database/sql"
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+// ---- users ----------------------------------------------------------------------
+
+type userRow struct {
+	ID          int64   `json:"id"`
+	Username    string  `json:"username"`
+	DisplayName string  `json:"display_name"`
+	Email       string  `json:"email"`
+	IsAdmin     bool    `json:"is_admin"`
+	Disabled    bool    `json:"disabled"`
+	SSO         bool    `json:"sso"`
+	HasPassword bool    `json:"has_password"`
+	GroupIDs    []int64 `json:"group_ids"`
+	Devices     int     `json:"devices"`
+	Active      int     `json:"active_fonts"`
+	CreatedAt   int64   `json:"created_at"`
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, u *authUser) {
+	rows, err := s.db.Query(`SELECT u.id, u.username, u.display_name, u.email, u.is_admin, u.disabled,
+		u.oidc_subject IS NOT NULL, COALESCE(u.password_hash, '') != '',
+		(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id),
+		(SELECT COUNT(*) FROM activations a WHERE a.user_id = u.id), u.created_at
+		FROM users u ORDER BY u.username COLLATE NOCASE`)
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	out := []*userRow{}
+	byID := map[int64]*userRow{}
+	for rows.Next() {
+		x := &userRow{GroupIDs: []int64{}}
+		rows.Scan(&x.ID, &x.Username, &x.DisplayName, &x.Email, &x.IsAdmin, &x.Disabled, &x.SSO, &x.HasPassword,
+			&x.Devices, &x.Active, &x.CreatedAt)
+		out = append(out, x)
+		byID[x.ID] = x
+	}
+	rows.Close()
+	gr, err := s.db.Query(`SELECT user_id, group_id FROM user_groups`)
+	if err == nil {
+		for gr.Next() {
+			var uid, gid int64
+			gr.Scan(&uid, &gid)
+			if x := byID[uid]; x != nil {
+				x.GroupIDs = append(x.GroupIDs, gid)
+			}
+		}
+		gr.Close()
+	}
+	writeJSON(w, 200, out)
+}
+
+type userReq struct {
+	Username    *string  `json:"username"`
+	DisplayName *string  `json:"display_name"`
+	Email       *string  `json:"email"`
+	Password    *string  `json:"password"`
+	IsAdmin     *bool    `json:"is_admin"`
+	Disabled    *bool    `json:"disabled"`
+	GroupIDs    *[]int64 `json:"group_ids"`
+}
+
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *authUser) {
+	var req userReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Username == nil || strings.TrimSpace(*req.Username) == "" {
+		writeErr(w, 400, "username required")
+		return
+	}
+	var hash any
+	if req.Password != nil && *req.Password != "" {
+		if len(*req.Password) < 10 {
+			writeErr(w, 400, "password must be at least 10 characters")
+			return
+		}
+		h, err := hashPassword(*req.Password)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		hash = h
+	}
+	str := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return strings.TrimSpace(*p)
+	}
+	res, err := s.db.Exec(`INSERT INTO users (username, display_name, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		str(req.Username), str(req.DisplayName), str(req.Email), hash, boolInt(req.IsAdmin != nil && *req.IsAdmin), now())
+	if err != nil {
+		writeErr(w, 409, "username already exists")
+		return
+	}
+	id, _ := res.LastInsertId()
+	if req.GroupIDs != nil {
+		s.setUserGroups(id, *req.GroupIDs)
+	}
+	s.audit(u, "user.create", "%s", str(req.Username))
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) setUserGroups(id int64, groups []int64) {
+	s.db.Exec(`DELETE FROM user_groups WHERE user_id = ?`, id)
+	for _, g := range groups {
+		s.db.Exec(`INSERT OR IGNORE INTO user_groups (user_id, group_id) SELECT ?, id FROM groups WHERE id = ?`, id, g)
+	}
+}
+
+func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	var req userReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if id == u.ID && ((req.IsAdmin != nil && !*req.IsAdmin) || (req.Disabled != nil && *req.Disabled)) {
+		writeErr(w, 400, "you cannot remove your own admin rights or disable yourself")
+		return
+	}
+	if req.Username != nil {
+		if strings.TrimSpace(*req.Username) == "" {
+			writeErr(w, 400, "username required")
+			return
+		}
+		if _, err := s.db.Exec(`UPDATE users SET username = ? WHERE id = ?`, strings.TrimSpace(*req.Username), id); err != nil {
+			writeErr(w, 409, "username already exists")
+			return
+		}
+	}
+	if req.DisplayName != nil {
+		s.db.Exec(`UPDATE users SET display_name = ? WHERE id = ?`, *req.DisplayName, id)
+	}
+	if req.Email != nil {
+		s.db.Exec(`UPDATE users SET email = ? WHERE id = ?`, *req.Email, id)
+	}
+	if req.Password != nil {
+		if *req.Password == "" {
+			s.db.Exec(`UPDATE users SET password_hash = NULL WHERE id = ?`, id)
+		} else {
+			if len(*req.Password) < 10 {
+				writeErr(w, 400, "password must be at least 10 characters")
+				return
+			}
+			h, err := hashPassword(*req.Password)
+			if err != nil {
+				s.internalErr(w, err)
+				return
+			}
+			s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, h, id)
+			s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+		}
+	}
+	if req.IsAdmin != nil {
+		s.db.Exec(`UPDATE users SET is_admin = ? WHERE id = ?`, boolInt(*req.IsAdmin), id)
+	}
+	if req.Disabled != nil {
+		s.db.Exec(`UPDATE users SET disabled = ? WHERE id = ?`, boolInt(*req.Disabled), id)
+		if *req.Disabled {
+			s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+		}
+	}
+	if req.GroupIDs != nil {
+		s.setUserGroups(id, *req.GroupIDs)
+	}
+	s.pruneActivations()
+	s.audit(u, "user.update", "user %d", id)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	if id == u.ID {
+		writeErr(w, 400, "you cannot delete yourself")
+		return
+	}
+	var name string
+	s.db.QueryRow(`SELECT username FROM users WHERE id = ?`, id).Scan(&name)
+	s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	s.audit(u, "user.delete", "%s", name)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// ---- groups ---------------------------------------------------------------------
+
+func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request, u *authUser) {
+	rows, err := s.db.Query(`SELECT g.id, g.name, g.description, (SELECT COUNT(*) FROM user_groups ug WHERE ug.group_id = g.id)
+		FROM groups g ORDER BY g.name COLLATE NOCASE`)
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	type grp struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Members     int    `json:"members"`
+	}
+	out := []grp{}
+	for rows.Next() {
+		var g grp
+		rows.Scan(&g.ID, &g.Name, &g.Description, &g.Members)
+		out = append(out, g)
+	}
+	writeJSON(w, 200, out)
+}
+
+type groupReq struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+}
+
+func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request, u *authUser) {
+	var req groupReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Name == nil || strings.TrimSpace(*req.Name) == "" {
+		writeErr(w, 400, "name required")
+		return
+	}
+	desc := ""
+	if req.Description != nil {
+		desc = *req.Description
+	}
+	res, err := s.db.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, strings.TrimSpace(*req.Name), desc)
+	if err != nil {
+		writeErr(w, 409, "group already exists")
+		return
+	}
+	id, _ := res.LastInsertId()
+	s.audit(u, "group.create", "%s", *req.Name)
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	var req groupReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Name != nil {
+		if _, err := s.db.Exec(`UPDATE groups SET name = ? WHERE id = ?`, strings.TrimSpace(*req.Name), id); err != nil {
+			writeErr(w, 409, "group already exists")
+			return
+		}
+	}
+	if req.Description != nil {
+		s.db.Exec(`UPDATE groups SET description = ? WHERE id = ?`, *req.Description, id)
+	}
+	s.audit(u, "group.update", "group %d", id)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	var name string
+	s.db.QueryRow(`SELECT name FROM groups WHERE id = ?`, id).Scan(&name)
+	s.db.Exec(`DELETE FROM groups WHERE id = ?`, id)
+	s.pruneActivations()
+	s.audit(u, "group.delete", "%s", name)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// ---- licenses -------------------------------------------------------------------
+
+type licenseRow struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Vendor    string `json:"vendor"`
+	Seats     int    `json:"seats"`
+	Notes     string `json:"notes"`
+	Fonts     int    `json:"fonts"`
+	Users     int    `json:"users"`
+	Devices   int    `json:"devices"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+const licenseSelect = `SELECT l.id, l.name, l.vendor, l.seats, l.notes, l.created_at,
+	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
+	(SELECT COUNT(DISTINCT a.user_id) FROM activations a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
+	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256 WHERE f.license_id = l.id)
+	FROM licenses l`
+
+func (s *Server) handleListLicenses(w http.ResponseWriter, r *http.Request, u *authUser) {
+	rows, err := s.db.Query(licenseSelect + ` ORDER BY l.name COLLATE NOCASE`)
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	out := []licenseRow{}
+	for rows.Next() {
+		var l licenseRow
+		rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Seats, &l.Notes, &l.CreatedAt, &l.Fonts, &l.Users, &l.Devices)
+		out = append(out, l)
+	}
+	writeJSON(w, 200, out)
+}
+
+type licenseReq struct {
+	Name   *string `json:"name"`
+	Vendor *string `json:"vendor"`
+	Seats  *int    `json:"seats"`
+	Notes  *string `json:"notes"`
+}
+
+func (s *Server) handleCreateLicense(w http.ResponseWriter, r *http.Request, u *authUser) {
+	var req licenseReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Name == nil || strings.TrimSpace(*req.Name) == "" {
+		writeErr(w, 400, "name required")
+		return
+	}
+	v := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
+	seats := 0
+	if req.Seats != nil && *req.Seats > 0 {
+		seats = *req.Seats
+	}
+	res, err := s.db.Exec(`INSERT INTO licenses (name, vendor, seats, notes, created_at) VALUES (?, ?, ?, ?, ?)`,
+		strings.TrimSpace(*req.Name), v(req.Vendor), seats, v(req.Notes), now())
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	id, _ := res.LastInsertId()
+	s.audit(u, "license.create", "%s", *req.Name)
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleUpdateLicense(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	var req licenseReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Name != nil {
+		s.db.Exec(`UPDATE licenses SET name = ? WHERE id = ?`, strings.TrimSpace(*req.Name), id)
+	}
+	if req.Vendor != nil {
+		s.db.Exec(`UPDATE licenses SET vendor = ? WHERE id = ?`, *req.Vendor, id)
+	}
+	if req.Seats != nil {
+		s.db.Exec(`UPDATE licenses SET seats = ? WHERE id = ?`, max(*req.Seats, 0), id)
+	}
+	if req.Notes != nil {
+		s.db.Exec(`UPDATE licenses SET notes = ? WHERE id = ?`, *req.Notes, id)
+	}
+	s.audit(u, "license.update", "license %d", id)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDeleteLicense(w http.ResponseWriter, r *http.Request, u *authUser) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	s.db.Exec(`DELETE FROM licenses WHERE id = ?`, id)
+	s.audit(u, "license.delete", "license %d", id)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// ---- reports ----------------------------------------------------------------------
+
+func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *authUser) {
+	type famRow struct {
+		Family    string  `json:"family"`
+		Faces     int     `json:"faces"`
+		License   *string `json:"license"`
+		Seats     *int    `json:"seats"`
+		Users     int     `json:"users"`
+		Devices   int     `json:"devices"`
+		UserNames string  `json:"user_names"`
+	}
+	rows, err := s.db.Query(`SELECT f.family, COUNT(DISTINCT f.id), MAX(l.name), MAX(l.seats),
+		(SELECT COUNT(DISTINCT a.user_id) FROM activations a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.family = f.family),
+		(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f3 ON f3.sha256 = df.sha256 WHERE f3.family = f.family),
+		COALESCE((SELECT GROUP_CONCAT(DISTINCT u.username) FROM activations a JOIN fonts f4 ON f4.id = a.font_id
+			JOIN users u ON u.id = a.user_id WHERE f4.family = f.family), '')
+		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
+		GROUP BY f.family ORDER BY f.family COLLATE NOCASE`)
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	out := []famRow{}
+	for rows.Next() {
+		var f famRow
+		var lic sql.NullString
+		var seats sql.NullInt64
+		rows.Scan(&f.Family, &f.Faces, &lic, &seats, &f.Users, &f.Devices, &f.UserNames)
+		if lic.Valid {
+			f.License = &lic.String
+			n := int(seats.Int64)
+			f.Seats = &n
+		}
+		out = append(out, f)
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *authUser) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	q := `SELECT id, ts, actor, action, detail FROM audit`
+	var args []any
+	if before > 0 {
+		q += ` WHERE id < ?`
+		args = append(args, before)
+	}
+	q += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	defer rows.Close()
+	type entry struct {
+		ID     int64  `json:"id"`
+		TS     int64  `json:"ts"`
+		Actor  string `json:"actor"`
+		Action string `json:"action"`
+		Detail string `json:"detail"`
+	}
+	out := []entry{}
+	for rows.Next() {
+		var e entry
+		rows.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail)
+		out = append(out, e)
+	}
+	writeJSON(w, 200, out)
+}
