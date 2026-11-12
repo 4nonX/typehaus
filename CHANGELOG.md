@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
 ### Added
 - **Installers for every system.** typehaus is now installed like any other program instead of running from the downloaded file:
   - **Windows:** `typehaus-setup-windows.exe`, one setup for Intel/AMD and ARM, in English or German. It installs for the current user without administrator rights to `%LOCALAPPDATA%\Programs\typehaus`, with a Start menu entry and an entry under *Settings → Apps* including an uninstaller. Updates close the running app, replace it and start it again. `/S` installs and uninstalls silently for Intune, GPO or scripts.
@@ -100,7 +102,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 - Agent binaries for all platforms bundled in the image and offered on the Devices page.
 - CI and release workflows publishing the container image to GHCR and binaries to GitHub releases.
 
-[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/4nonX/typehaus/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/4nonX/typehaus/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/4nonX/typehaus/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/4nonX/typehaus/compare/v0.1.0...v0.2.0
