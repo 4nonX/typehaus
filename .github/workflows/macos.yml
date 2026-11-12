@@ -1,0 +1,76 @@
+name: macos
+
+# macOS runners are scarce and often queued for minutes, so the macOS checks
+# only run when something the Mac side depends on changed: the agent, font
+# parsing, the menu-bar app, the e2e tool. Server and web UI changes are
+# covered by the Linux and Windows jobs in ci.yml. Release tags always build
+# on macOS (release.yml).
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "internal/agent/**"
+      - "internal/brand/**"
+      - "internal/fontmeta/**"
+      - "internal/protocol/**"
+      - "cmd/typehaus-agent/**"
+      - "packaging/macos/**"
+      - "tools/e2e/**"
+      - "tools/fontscan/**"
+      - "testdata/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "internal/agent/**"
+      - "internal/brand/**"
+      - "internal/fontmeta/**"
+      - "internal/protocol/**"
+      - "cmd/typehaus-agent/**"
+      - "packaging/macos/**"
+      - "tools/e2e/**"
+      - "tools/fontscan/**"
+      - "testdata/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything macOS in ONE job: macOS runners are the bottleneck (a job
+  # takes about a minute, but waiting for a free runner can take ten).
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./internal/agent/... ./cmd/typehaus-agent
+      - name: Every system font must import
+        run: go run ./tools/fontscan -strict -gha /System/Library/Fonts /Library/Fonts
+      - name: Build
+        run: |
+          go build -o bin/typehaus-server ./cmd/typehaus-server
+          go build -o bin/typehaus-agent ./cmd/typehaus-agent
+          go build -o bin/e2e ./tools/e2e
+      - name: End-to-end test (install, removal, revocation)
+        # TypehausTestBitmap.fon must NOT be installed on macOS
+        run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font "testdata/fonts/Poppins-Regular.woff2,testdata/fonts/TypehausTestBitmap.fon"
+      - name: Menu-bar app
+        run: packaging/macos/build-app.sh ci
+      - name: Smoke test
+        run: |
+          dist/agents/typehaus-agent-darwin-arm64 version
+          unzip -q dist/agents/typehaus-agent-darwin-universal.app.zip -d /tmp/app
+          lipo -info /tmp/app/typehaus.app/Contents/MacOS/typehaus-agent
+          codesign --verify --verbose /tmp/app/typehaus.app
+
