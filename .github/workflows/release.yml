@@ -4,7 +4,14 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"] # not applied to tags
   workflow_dispatch:
+
+# Pushes to main replace an older edge build still waiting for a runner;
+# release tags always run to the end.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: write

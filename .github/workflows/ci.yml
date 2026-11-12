@@ -3,10 +3,19 @@ name: ci
 on:
   push:
     branches: ["**"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
 
 permissions:
   contents: read
+
+# A newer push to the same branch replaces a run still in progress or queued.
+# macOS runners are scarce (few concurrent jobs per account): don't let
+# outdated runs wait for them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -29,6 +38,8 @@ jobs:
             GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/typehaus-agent
           done
 
+  # Everything macOS in ONE job: macOS runners are the bottleneck (a job
+  # takes about a minute, but waiting for a free runner can take ten).
   macos:
     runs-on: macos-latest
     steps:
@@ -37,7 +48,18 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./internal/agent/... ./cmd/typehaus-agent
-      - run: packaging/macos/build-app.sh ci
+      - name: Every system font must import
+        run: go run ./tools/fontscan -strict -gha /System/Library/Fonts /Library/Fonts
+      - name: Build
+        run: |
+          go build -o bin/typehaus-server ./cmd/typehaus-server
+          go build -o bin/typehaus-agent ./cmd/typehaus-agent
+          go build -o bin/e2e ./tools/e2e
+      - name: End-to-end test (install, removal, revocation)
+        # TypehausTestBitmap.fon must NOT be installed on macOS
+        run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font "testdata/fonts/Poppins-Regular.woff2,testdata/fonts/TypehausTestBitmap.fon"
+      - name: Menu-bar app
+        run: packaging/macos/build-app.sh ci
       - name: Smoke test
         run: |
           dist/agents/typehaus-agent-darwin-arm64 version
@@ -50,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest] # macOS: see the macos job
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +104,6 @@ jobs:
               [ -f "$afm" ] && fonts="$fonts,$afm"
               ;;
             Windows) fonts="$fonts,C:/Windows/Fonts/8514oem.fon" ;;
-            macOS)   fonts="$fonts,testdata/fonts/TypehausTestBitmap.fon" ;;  # must NOT be installed on macOS
           esac
           echo "list=$fonts" >> "$GITHUB_OUTPUT"
           echo "$fonts"
@@ -101,8 +122,6 @@ jobs:
         include:
           - os: windows-latest
             dirs: C:/Windows/Fonts
-          - os: macos-latest
-            dirs: /System/Library/Fonts /Library/Fonts
           - os: ubuntu-latest
             dirs: /usr/share/fonts
     runs-on: ${{ matrix.os }}
