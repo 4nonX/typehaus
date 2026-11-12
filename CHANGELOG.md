@@ -27,6 +27,7 @@ The section matching a release tag becomes that release's notes on GitHub.
 - CI imports the complete system font folders of Windows, macOS and Linux on every change, and installs real `.fon`, Type 1, PCF and WOFF2 fonts end to end on all three systems.
 
 ### Fixed
+- Dark mode: the selection bar in the library was barely readable (dark menus on a light bar). It is now a regular card in both themes and stays in view while scrolling. Native controls (menus, date pickers, scrollbars) follow the theme, and the sign-in page text has proper contrast.
 - Windows system fonts in `.fon` format (e.g. `8514OEM.FON`) were rejected as "not a TrueType or OpenType font".
 - Linux: activated bitmap fonts were hidden by the distribution's fontconfig defaults; typehaus now allows fonts in its own folder.
 

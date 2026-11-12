@@ -23,6 +23,7 @@
     --accent: #f0603f;
   }
 }
+:root { color-scheme: light dark; } /* native controls (menus, date pickers, scrollbars) follow the theme */
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
 a { color: inherit; }
@@ -96,7 +97,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 }
 .login .art .big { font: italic 400 clamp(90px, 14vw, 220px)/0.85 var(--serif); letter-spacing: -0.04em; }
 .login .art .big b { color: var(--accent); font-style: normal; }
-.login .art p { max-width: 380px; color: #bdb6a8; }
+.login .art p { max-width: 380px; color: color-mix(in srgb, var(--paper) 72%, var(--ink)); }
 .login form { align-self: center; justify-self: center; width: min(360px, 90vw); display: grid; gap: 14px; padding: 40px 0; }
 .login form h1 { margin-bottom: 8px; }
 .alert { padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-size: 14px; }
@@ -118,9 +119,13 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .toolbar input[type=search] { width: 220px; }
 .toolbar input.preview-text { flex: 1; min-width: 180px; }
 .toolbar input[type=range] { width: 110px; accent-color: var(--accent); }
-.bulk { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--ink); color: var(--paper); border-radius: var(--radius); margin: 8px 0 16px; flex-wrap: wrap; }
-.bulk .btn { background: transparent; color: var(--paper); border-color: #555; }
-.bulk select { background: #2b2925; color: var(--paper); border-color: #555; }
+/* selection bar: an ordinary raised card in both themes, stays in view while scrolling */
+.bulk {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 14px; margin: 8px 0 16px;
+  background: var(--card); color: var(--ink); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,.12); position: sticky; top: 10px; z-index: 5;
+}
+.bulk select { background: var(--paper); color: var(--ink); }
 
 .family { border-bottom: 1px solid var(--rule); padding: 18px 4px; }
 .family-head { display: flex; align-items: center; gap: 12px; }
