@@ -26,6 +26,12 @@ RUN set -e; mkdir -p /out/agents; \
     done; \
     mkdir -p /out/data
 
+# CI places agents that need native toolchains (macOS menu-bar app, built
+# on a macOS runner) in dist/agents; they replace the cross-compiled ones.
+# "dis[t]" makes the copy optional for plain `docker build .`.
+COPY go.mod dis[t] /prebuilt/
+RUN if [ -d /prebuilt/agents ]; then cp -v /prebuilt/agents/typehaus-agent* /out/agents/; fi
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/typehaus-server /usr/local/bin/typehaus-server
 COPY --from=build /out/agents /app/agents

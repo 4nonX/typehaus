@@ -463,10 +463,10 @@ async function renderDevices(page) {
     <div class="grid2">
       <div class="card">
         <h2 style="margin-top:0">Add a computer</h2>
-        <ol class="small" style="padding-left:18px;color:var(--ink-2)">
-          <li>Download the agent for your system.</li>
-          <li>Create an enrollment code (valid for 15 minutes, single use).</li>
-          <li>Run the commands shown below in a terminal.</li>
+        <ol class="small steps">
+          <li><b>Download typehaus</b> for your computer and open it.</li>
+          <li>The <span class="tmark">t<i></i></span> icon appears in your taskbar or menu bar and asks for a server address and a code.</li>
+          <li><b>Create a code</b> here and enter it. It works once and expires after 15 minutes.</li>
         </ol>
         <div id="dl" class="row" style="margin:12px 0"></div>
         <button class="btn primary" id="mkcode">Create enrollment code</button>
@@ -475,6 +475,7 @@ async function renderDevices(page) {
       <div class="card">
         <h2 style="margin-top:0">How it works</h2>
         <p class="small" style="color:var(--ink-2)">Turn fonts on in the <a href="#/library">Library</a>. Every enrolled computer picks up the change within about a minute and installs the fonts for your user. Turn them off and they disappear again. If access is revoked, the agent removes the fonts it installed.</p>
+        <p class="small" style="color:var(--ink-2)">The <span class="tmark">t<i></i></span> icon shows the sync status: a solid square means up to date, an outlined square that the server can't be reached (fonts stay active), and an amber diamond that something needs attention.</p>
         <p class="small muted">Windows: per-user font registration (Windows 10 1809+). macOS: ~/Library/Fonts. Linux: ~/.local/share/fonts via fontconfig.</p>
       </div>
     </div>
@@ -492,15 +493,15 @@ async function renderDevices(page) {
       }).join('')}</tbody></table>` : '<div class="empty">No devices enrolled yet.</div>'}`;
 
   const dl = $('#dl', page);
-  const visible = downloads.filter((d) => !d.headless);
-  if (visible.length) {
-    const label = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
-    const archL = { amd64: 'x64', arm64: 'ARM' };
-    dl.innerHTML = visible.map((d) => `<a class="btn sm" href="${esc(d.url)}" download>${label[d.os] || esc(d.os)} ${archL[d.arch] || esc(d.arch)}</a>`).join('');
-    const hl = downloads.filter((d) => d.headless);
-    if (hl.length) dl.insertAdjacentHTML('beforeend', `<span class="small muted">Windows: also get ${hl.map((d) => `<a href="${esc(d.url)}" download>${esc(d.name)}</a>`).join(', ')} (runs without a console window) and keep it in the same folder.</span>`);
+  const label = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
+  const archL = { amd64: 'Intel/AMD', arm64: 'ARM', universal: '' };
+  const primary = downloads.filter((d) => !d.headless && (d.os !== 'darwin' || d.app || !downloads.some((x) => x.app)));
+  const guessOS = /Win/.test(navigator.platform) ? 'windows' : /Mac/.test(navigator.platform) ? 'darwin' : 'linux';
+  if (primary.length) {
+    primary.sort((a, b) => (b.os === guessOS) - (a.os === guessOS));
+    dl.innerHTML = primary.map((d) => `<a class="btn sm ${d.os === guessOS && (d.arch === 'amd64' || d.app || d.os === 'darwin') ? 'primary' : ''}" href="${esc(d.url)}" download>${label[d.os] || esc(d.os)}${archL[d.arch] !== undefined ? (archL[d.arch] ? ' ' + archL[d.arch] : '') : ' ' + esc(d.arch)}</a>`).join('');
   } else {
-    dl.innerHTML = '<span class="small muted">Agent binaries are available on the <a href="https://github.com/4nonX/typehaus/releases/latest" target="_blank" rel="noopener">GitHub releases page</a>.</span>';
+    dl.innerHTML = '<span class="small muted">Get typehaus from the <a href="https://github.com/4nonX/typehaus/releases/latest" target="_blank" rel="noopener">releases page</a>.</span>';
   }
 
   $('#mkcode', page).onclick = async () => {
@@ -512,17 +513,22 @@ async function renderDevices(page) {
         darwin: `chmod +x typehaus-agent-darwin-arm64\nxattr -d com.apple.quarantine typehaus-agent-darwin-arm64 2>/dev/null\n${bin.darwin} enroll --server ${c.server} --code ${c.code}\n${bin.darwin} autostart enable`,
         linux: `chmod +x typehaus-agent-linux-amd64\n${bin.linux} enroll --server ${c.server} --code ${c.code}\n${bin.linux} autostart enable`,
       };
-      const guess = /Win/.test(navigator.platform) ? 'windows' : /Mac/.test(navigator.platform) ? 'darwin' : 'linux';
       const box = $('#codebox', page);
-      box.innerHTML = `<div style="margin-top:16px"><div class="enroll-code">${esc(c.code)}</div>
-        <p class="small muted">Expires ${new Date(c.expires_at * 1000).toLocaleTimeString()}.</p>
-        <div class="tabs">${['windows', 'darwin', 'linux'].map((o) => `<button data-os="${o}" class="${o === guess ? 'active' : ''}">${{ windows: 'Windows', darwin: 'macOS', linux: 'Linux' }[o]}</button>`).join('')}</div>
-        <div class="code" id="cmd"></div>
-        <div class="row" style="margin-top:8px"><button class="btn sm" id="copy">Copy commands</button><span class="small muted">Adjust the file name if you downloaded another architecture.</span></div></div>`;
+      box.innerHTML = `<div class="enroll">
+          <div class="kv"><span>Server address</span><b class="mono">${esc(c.server)}</b><button class="btn sm ghost" data-copy="${esc(c.server)}">Copy</button></div>
+          <div class="kv"><span>Code</span><b class="enroll-code">${esc(c.code)}</b><button class="btn sm ghost" data-copy="${esc(c.code)}">Copy</button></div>
+          <p class="small muted">Valid until ${new Date(c.expires_at * 1000).toLocaleTimeString()}.</p>
+        </div>
+        <details class="cli"><summary class="small">Prefer the command line?</summary>
+          <div class="tabs">${['windows', 'darwin', 'linux'].map((o) => `<button data-os="${o}">${label[o]}</button>`).join('')}</div>
+          <div class="code" id="cmd"></div>
+          <div class="row" style="margin-top:8px"><button class="btn sm" id="copy">Copy commands</button><span class="small muted">Adjust the file name for your architecture.</span></div>
+        </details>`;
       const show = (o) => { $('#cmd', box).textContent = cmds[o]; $$('.tabs button', box).forEach((b) => b.classList.toggle('active', b.dataset.os === o)); };
       $$('.tabs button', box).forEach((b) => b.onclick = () => show(b.dataset.os));
       $('#copy', box).onclick = () => navigator.clipboard.writeText($('#cmd', box).textContent).then(() => toast('Copied'), fail);
-      show(guess);
+      $$('[data-copy]', box).forEach((b) => b.onclick = () => navigator.clipboard.writeText(b.dataset.copy).then(() => toast('Copied'), fail));
+      show(guessOS);
     } catch (e) { fail(e); }
   };
   $$('[data-revoke]', page).forEach((b) => b.onclick = () => confirmDialog('Revoke device',

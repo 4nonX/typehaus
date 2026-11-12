@@ -18,10 +18,12 @@ type download struct {
 	Size     int64  `json:"size"`
 	URL      string `json:"url"`
 	Headless bool   `json:"headless"`
+	App      bool   `json:"app"` // macOS .app bundle (zip)
 }
 
 // handleListDownloads lists agent binaries named
-// typehaus-agent-<os>-<arch>[.exe] (and typehaus-agentw-windows-<arch>.exe).
+// typehaus-agent-<os>-<arch>[.exe], typehaus-agentw-windows-<arch>.exe and
+// typehaus-agent-darwin-universal.app.zip.
 func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	out := []download{}
 	ents, err := os.ReadDir(s.cfg.AgentsDir)
@@ -36,13 +38,15 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 			}
 			base := strings.TrimSuffix(e.Name(), ".exe")
 			base = strings.TrimSuffix(base, ".zip")
+			isApp := strings.HasSuffix(base, ".app")
+			base = strings.TrimSuffix(base, ".app")
 			parts := strings.Split(base, "-")
 			if len(parts) < 4 {
 				continue
 			}
 			out = append(out, download{
 				Name: e.Name(), OS: parts[len(parts)-2], Arch: parts[len(parts)-1], Size: info.Size(),
-				URL: "/downloads/" + e.Name(), Headless: strings.HasPrefix(e.Name(), "typehaus-agentw"),
+				URL: "/downloads/" + e.Name(), Headless: strings.HasPrefix(e.Name(), "typehaus-agentw"), App: isApp,
 			})
 		}
 	}

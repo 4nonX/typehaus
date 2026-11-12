@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 permissions:
@@ -18,12 +18,29 @@ jobs:
           go-version-file: go.mod
       - name: Install test fonts
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - run: go vet ./...
       - run: GOOS=windows go vet ./...
-      - run: GOOS=darwin go vet ./...
+      - run: GOOS=darwin CGO_ENABLED=0 go vet ./...
       - run: go test -race ./...
       - name: Cross-compile agents
         run: |
-          for t in windows/amd64 windows/arm64 darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+          for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64; do
             GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/typehaus-agent
           done
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./internal/agent/... ./cmd/typehaus-agent
+      - run: packaging/macos/build-app.sh ci
+      - name: Smoke test
+        run: |
+          dist/agents/typehaus-agent-darwin-arm64 version
+          unzip -q dist/agents/typehaus-agent-darwin-universal.app.zip -d /tmp/app
+          lipo -info /tmp/app/typehaus.app/Contents/MacOS/typehaus-agent
+          codesign --verify --verbose /tmp/app/typehaus.app

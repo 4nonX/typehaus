@@ -11,12 +11,15 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"syscall"
 	"time"
 
 	"github.com/4nonX/typehaus/internal/agent"
+	"github.com/4nonX/typehaus/internal/agent/tray"
+	"github.com/4nonX/typehaus/internal/agent/ui"
 )
 
 var version = "dev"
@@ -24,13 +27,18 @@ var version = "dev"
 const usage = `typehaus-agent %s – font sync agent for typehaus
 
 Usage:
+  typehaus-agent
+      (no arguments, e.g. double-click) Start the tray / menu-bar app. If this
+      computer isn't connected yet, the typehaus window opens to connect it.
+  typehaus-agent tray [--autostart]
+      Same as above. --autostart: don't open the window (used at login).
   typehaus-agent enroll --server URL --code CODE [--name NAME] [--ca-file FILE]
       Link this computer to your typehaus account. Get a code in the web UI
       under "Devices".
   typehaus-agent autostart enable|disable
       Start the agent automatically at login (per user, no admin rights).
   typehaus-agent run
-      Run in the foreground and keep fonts in sync.
+      Run headless in the foreground and keep fonts in sync (servers, scripts).
   typehaus-agent sync [--force]
       Sync once and exit.
   typehaus-agent status
@@ -47,8 +55,12 @@ Environment:
 func main() {
 	agent.Version = version
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, usage, version)
-		os.Exit(2)
+		if err := cmdTray(false); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			fmt.Fprintf(os.Stderr, "\n"+usage, version)
+			os.Exit(1)
+		}
+		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -57,6 +69,8 @@ func main() {
 	switch os.Args[1] {
 	case "enroll":
 		err = cmdEnroll(ctx, os.Args[2:])
+	case "tray":
+		err = cmdTray(len(os.Args) > 2 && os.Args[2] == "--autostart")
 	case "run":
 		err = cmdRun(ctx)
 	case "sync":
@@ -116,6 +130,70 @@ func cmdEnroll(ctx context.Context, args []string) error {
 	return nil
 }
 
+// fileLogger logs to the agent log file (and the console, if attached).
+func fileLogger() (*slog.Logger, func()) {
+	var out io.Writer = os.Stderr
+	closer := func() {}
+	if lp, err := agent.LogPath(); err == nil {
+		os.MkdirAll(filepath.Dir(lp), 0o700)
+		if fi, err := os.Stat(lp); err == nil && fi.Size() > 5<<20 {
+			os.Rename(lp, lp+".1")
+		}
+		if f, err := os.OpenFile(lp, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			closer = func() { f.Close() }
+			if hasConsole() {
+				out = io.MultiWriter(os.Stderr, f)
+			} else {
+				out = f
+			}
+		}
+	}
+	return slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo})), closer
+}
+
+// cmdTray runs the tray / menu-bar app with the agent window.
+func cmdTray(autostart bool) error {
+	// Already running? Bring up its window instead of starting twice.
+	if u := agent.RunningWindowURL(); u != "" {
+		return agent.OpenURL(u)
+	}
+	detachConsole()
+	release, err := agent.WritePID()
+	if err != nil {
+		return err
+	}
+	defer release()
+	log, closeLog := fileLogger()
+	defer closeLog()
+
+	log.Info("typehaus starting", "version", version, "os", runtime.GOOS, "tray", tray.Available())
+	c := agent.NewController(log)
+	win, err := ui.Start(c)
+	if err != nil {
+		return err
+	}
+	agent.PublishWindowURL(win.URL())
+	defer agent.ClearWindowURL()
+	c.Start()
+
+	if tray.Available() {
+		return tray.Run(c, win, log, tray.Options{OpenWindowIfDisconnected: !autostart})
+	}
+	// No tray host (e.g. GNOME without the AppIndicator extension): keep
+	// syncing in the background; the window is reachable by launching
+	// typehaus again.
+	log.Warn("no system tray available – running in the background; launch typehaus again to open its window")
+	if !autostart {
+		agent.OpenURL(win.URL())
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	c.Stop()
+	win.Close()
+	return nil
+}
+
 func cmdRun(ctx context.Context) error {
 	cfg, err := agent.LoadConfig()
 	if err != nil {
@@ -126,22 +204,8 @@ func cmdRun(ctx context.Context) error {
 		return err
 	}
 	defer release()
-
-	var out io.Writer = os.Stderr
-	if lp, err := agent.LogPath(); err == nil {
-		if fi, err := os.Stat(lp); err == nil && fi.Size() > 5<<20 {
-			os.Rename(lp, lp+".1")
-		}
-		if f, err := os.OpenFile(lp, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
-			defer f.Close()
-			if hasConsole() {
-				out = io.MultiWriter(os.Stderr, f)
-			} else {
-				out = f
-			}
-		}
-	}
-	log := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	log, closeLog := fileLogger()
+	defer closeLog()
 	log.Info("typehaus agent starting", "version", version, "server", cfg.Server, "user", cfg.User, "os", runtime.GOOS)
 	a, err := agent.New(cfg, log)
 	if err != nil {
@@ -245,13 +309,17 @@ func cmdAutostart(args []string) error {
 		if _, err := agent.LoadConfig(); err != nil {
 			return err
 		}
-		msg, err := agent.EnableAutostart()
+		mode := "run"
+		if tray.Available() {
+			mode = "tray"
+		}
+		msg, err := agent.EnableAutostart(mode, true)
 		if err != nil {
 			return err
 		}
 		fmt.Println("Autostart enabled:", msg)
 	case "disable":
-		if err := agent.DisableAutostart(); err != nil {
+		if err := agent.DisableAutostart(true); err != nil {
 			return err
 		}
 		fmt.Println("Autostart disabled.")
@@ -262,7 +330,7 @@ func cmdAutostart(args []string) error {
 }
 
 func cmdUnenroll() error {
-	agent.DisableAutostart()
+	agent.DisableAutostart(true)
 	cfg, err := agent.LoadConfig()
 	if err != nil {
 		return err

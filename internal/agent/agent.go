@@ -259,6 +259,10 @@ type Agent struct {
 	hc  *http.Client
 	log *slog.Logger
 	sys platform
+
+	// OnApply, if set, is called before fonts are installed or removed with
+	// the number of pending changes (used to animate the tray icon).
+	OnApply func(changes int)
 }
 
 // New creates an agent for an enrolled device.
@@ -350,6 +354,23 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 		want[f.SHA256] = f
 	}
 	changed := false
+
+	if a.OnApply != nil {
+		pending := 0
+		for sha, inst := range st.Fonts {
+			if _, ok := want[sha]; !ok || inst.PendingRemoval {
+				pending++
+			}
+		}
+		for sha := range want {
+			if _, ok := st.Fonts[sha]; !ok {
+				pending++
+			}
+		}
+		if pending > 0 {
+			a.OnApply(pending)
+		}
+	}
 
 	// remove fonts no longer wanted (and retry pending removals)
 	for sha, inst := range st.Fonts {

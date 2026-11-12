@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/4nonX/typehaus/internal/brand"
 )
 
 func xdgConfig() (string, error) {
@@ -37,10 +39,20 @@ func quoteArg(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
 
-// EnableAutostart installs a systemd user service, or an XDG autostart entry
-// when systemd --user is unavailable.
-func EnableAutostart() (string, error) {
-	StopRunning()
+func unitPath(cfg string) string {
+	return filepath.Join(cfg, "systemd", "user", "typehaus-agent.service")
+}
+func desktopPath(cfg string) string {
+	return filepath.Join(cfg, "autostart", "typehaus-agent.desktop")
+}
+
+// EnableAutostart starts the agent at login. Tray mode uses an XDG autostart
+// entry (it needs the desktop session); headless mode prefers a systemd user
+// service and falls back to XDG autostart.
+func EnableAutostart(mode string, startNow bool) (string, error) {
+	if startNow {
+		StopRunning()
+	}
 	bin, err := installBinary()
 	if err != nil {
 		return "", err
@@ -49,8 +61,16 @@ func EnableAutostart() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if hasSystemdUser() {
-		unit := filepath.Join(cfg, "systemd", "user", "typehaus-agent.service")
+	// only one mechanism at a time
+	os.Remove(desktopPath(cfg))
+	if _, err := os.Stat(unitPath(cfg)); err == nil {
+		exec.Command("systemctl", "--user", "disable", "typehaus-agent.service").Run()
+		os.Remove(unitPath(cfg))
+		exec.Command("systemctl", "--user", "daemon-reload").Run()
+	}
+
+	if mode == "run" && hasSystemdUser() {
+		unit := unitPath(cfg)
 		content := fmt.Sprintf(`[Unit]
 Description=typehaus font sync agent
 After=graphical-session.target network-online.target
@@ -70,44 +90,89 @@ WantedBy=default.target
 			return "", err
 		}
 		exec.Command("systemctl", "--user", "daemon-reload").Run()
-		if out, err := exec.Command("systemctl", "--user", "enable", "--now", "typehaus-agent.service").CombinedOutput(); err != nil {
+		args := []string{"--user", "enable", "typehaus-agent.service"}
+		if startNow {
+			args = append(args, "--now")
+		}
+		if out, err := exec.Command("systemctl", args...).CombinedOutput(); err != nil {
 			return "", fmt.Errorf("systemctl enable: %v: %s", err, out)
 		}
-		return "installed and started systemd user service " + unit, nil
+		return "systemd user service " + unit, nil
 	}
-	desk := filepath.Join(cfg, "autostart", "typehaus-agent.desktop")
-	content := fmt.Sprintf("[Desktop Entry]\nType=Application\nName=typehaus agent\nExec=%s run\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n", quoteArg(bin))
+
+	installDesktopIcon()
+	desk := desktopPath(cfg)
+	content := fmt.Sprintf("[Desktop Entry]\nType=Application\nName=typehaus\nComment=Keeps your typehaus fonts in sync\nExec=%s %s\nIcon=typehaus\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
+		quoteArg(bin), autostartArgs(mode))
 	if err := os.MkdirAll(filepath.Dir(desk), 0o755); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(desk, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	cmd := exec.Command(bin, "run")
-	if err := cmd.Start(); err == nil {
-		cmd.Process.Release()
+	if startNow {
+		cmd := exec.Command(bin, mode)
+		if err := cmd.Start(); err == nil {
+			cmd.Process.Release()
+		}
 	}
-	return "installed XDG autostart entry " + desk + " and started the agent", nil
+	return "XDG autostart entry " + desk, nil
 }
 
-// DisableAutostart removes the service / autostart entry and stops the agent.
-func DisableAutostart() error {
+// installDesktopIcon puts the app icon into the user's icon theme so the
+// autostart entry and notifications show the typehaus mark.
+func installDesktopIcon() {
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		base = filepath.Join(home, ".local", "share")
+	}
+	for _, sz := range []int{48, 256} {
+		d := filepath.Join(base, "icons", "hicolor", fmt.Sprintf("%dx%d", sz, sz), "apps")
+		if os.MkdirAll(d, 0o755) == nil {
+			os.WriteFile(filepath.Join(d, "typehaus.png"), brand.PNG(brand.Mark(sz, brand.Tile, brand.StateOK, 0)), 0o644)
+		}
+	}
+}
+
+// DisableAutostart removes the service / autostart entry.
+func DisableAutostart(stop bool) error {
 	cfg, err := xdgConfig()
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("systemctl"); err == nil {
-		exec.Command("systemctl", "--user", "disable", "--now", "typehaus-agent.service").Run()
+	if _, err := os.Stat(unitPath(cfg)); err == nil {
+		args := []string{"--user", "disable", "typehaus-agent.service"}
+		if stop {
+			args = append(args, "--now")
+		}
+		exec.Command("systemctl", args...).Run()
 	}
-	for _, p := range []string{
-		filepath.Join(cfg, "systemd", "user", "typehaus-agent.service"),
-		filepath.Join(cfg, "autostart", "typehaus-agent.desktop"),
-	} {
+	for _, p := range []string{unitPath(cfg), desktopPath(cfg)} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	exec.Command("systemctl", "--user", "daemon-reload").Run()
-	StopRunning()
+	if stop {
+		StopRunning()
+	}
 	return nil
+}
+
+// AutostartEnabled reports whether an autostart entry exists.
+func AutostartEnabled() bool {
+	cfg, err := xdgConfig()
+	if err != nil {
+		return false
+	}
+	for _, p := range []string{unitPath(cfg), desktopPath(cfg)} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
