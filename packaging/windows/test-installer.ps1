@@ -22,9 +22,11 @@ function WaitFor([scriptblock]$cond, [int]$seconds = 20) {
 }
 # Wait for the setup itself only: Start-Process -Wait would also wait for the
 # typehaus app the setup starts, i.e. forever.
-function RunAndWait([string]$file, [string]$args, [int]$seconds = 120) {
-  $p = Start-Process -FilePath $file -ArgumentList $args -PassThru
-  if (-not $p.WaitForExit($seconds * 1000)) { Fail "$file $args did not finish within $seconds s" }
+function RunAndWait([string]$file, [string]$arguments, [int]$seconds = 120) {
+  $p = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
+  $null = $p.Handle # keeps the handle, otherwise ExitCode can be empty
+  if (-not $p.WaitForExit($seconds * 1000)) { Fail "$file $arguments did not finish within $seconds s" }
+  $p.WaitForExit()
   return $p.ExitCode
 }
 function Install([string]$what) {
