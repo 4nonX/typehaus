@@ -12,7 +12,7 @@ Teams share fonts through network drives, USB sticks and "can you send me that f
 
 typehaus does the core of it, free:
 
-- **One library.** Upload TTF, OTF, TTC or whole ZIP archives. Metadata (family, style, weight, designer, foundry, embedding rights) is read straight from the font. Duplicates are detected by content hash.
+- **One library, every format.** Upload single files, ZIP archives or whole font folders: TrueType, OpenType (including variable and colour fonts), collections, WOFF/WOFF2/EOT, Mac suitcases, PostScript Type 1, Windows bitmap fonts, X11 bitmap fonts (full list [below](#supported-font-formats)). Metadata (family, style, weight, designer, foundry, embedding rights) is read straight from the font. Duplicates are detected by content hash. Font licenses never block an upload; embedding restrictions are shown as a badge.
 - **Collections & groups.** Decide who sees what. "Brand fonts" for everyone, the licensed display family for the design group only.
 - **Activate from the browser.** Toggle a family or a single style. Every computer you enrolled installs it within a minute and removes it when you turn it off.
 - **No admin rights.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux.
@@ -45,6 +45,20 @@ Then:
 4. **Devices** → each user downloads typehaus, opens it, and connects with a one-time code.
 
 Put typehaus behind your reverse proxy with HTTPS. Allow uploads of a few hundred MB there; the [install guide](docs/install.md#reverse-proxy-and-https) has examples.
+
+## Supported font formats
+
+| Format | Files | Installed on |
+|---|---|---|
+| TrueType / OpenType, incl. variable, colour (COLR, SVG, sbix) and bitmap-in-OpenType | `.ttf` `.otf` `.otb` | Windows, macOS, Linux |
+| Collections | `.ttc` `.otc` | Windows, macOS, Linux |
+| Web fonts: converted to TTF/OTF on upload | `.woff` `.woff2` `.eot` | Windows, macOS, Linux |
+| Mac fonts: `.dfont`, and suitcases or LWFN inside a ZIP made on a Mac (the resource fork travels in `__MACOSX`): converted on upload | `.dfont`, suitcases | Windows, macOS, Linux (Type 1 outlines: see below) |
+| PostScript Type 1, with `.pfm` (Windows) and/or `.afm` metrics: upload them together | `.pfb` `.pfa` `.t1` + `.pfm` `.afm` | Linux; Windows when the `.pfm` is included |
+| Windows bitmap and vector fonts | `.fon` `.fnt` | Windows, Linux |
+| X11 bitmap fonts (also gzip-compressed) | `.pcf` `.bdf` `.pcf.gz` | Linux |
+
+Each computer only receives the formats its system can install. The library marks fonts that are limited to some systems. Desktop systems can't install SVG fonts at all; convert them to OpenType. CI checks every font in the system font folders of Windows, macOS and Linux against the importer on every change.
 
 ## The typehaus app (agent)
 

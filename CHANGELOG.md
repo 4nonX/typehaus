@@ -6,6 +6,22 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Added
+- **Every font format.** Besides TrueType/OpenType (incl. variable, colour and collections), typehaus now imports:
+  - WOFF, WOFF2 and EOT web fonts, converted to TTF/OTF on upload
+  - Mac `.dfont`, suitcases and LWFN (from ZIPs made on a Mac)
+  - PostScript Type 1 (`.pfb`/`.pfa`/`.t1`) with their `.pfm`/`.afm` metrics
+  - Windows bitmap and vector fonts (`.fon`, `.fnt`)
+  - X11 bitmap fonts (`.pcf`, `.bdf`, also gzip-compressed)
+  
+  Each computer only receives formats its system can install. The library shows format and platform badges.
+- Drag and drop whole font folders; large uploads are sent in batches.
+- CI imports the complete system font folders of Windows, macOS and Linux on every change, and installs real `.fon`, Type 1, PCF and WOFF2 fonts end to end on all three systems.
+
+### Fixed
+- Windows system fonts in `.fon` format (e.g. `8514OEM.FON`) were rejected as "not a TrueType or OpenType font".
+- Linux: activated bitmap fonts were hidden by the distribution's fontconfig defaults; typehaus now allows fonts in its own folder.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
