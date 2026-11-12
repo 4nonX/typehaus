@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Fixed
+- Devices page: after updating the agent, the old version was shown until the next font change. The server now records the agent version on every check.
+
 ## [0.3.0] - 2026-11-12
 
 ### Added

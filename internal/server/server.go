@@ -384,11 +384,17 @@ func (s *Server) device(h func(http.ResponseWriter, *http.Request, *authDevice))
 			writeErr(w, http.StatusUnauthorized, "device not enrolled or revoked")
 			return
 		}
-		s.db.Exec(`UPDATE devices SET last_seen = ?, last_ip = ? WHERE id = ?`, now(), s.clientIP(r), d.ID)
 		d.Platform = strings.TrimSuffix(d.Platform, "-machine")
 		if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "typehaus-agent/") {
 			d.Agent, _, _ = strings.Cut(strings.TrimPrefix(ua, "typehaus-agent/"), " ")
+			d.Agent = trunc(d.Agent, 40)
 		}
+		// Every request carries the agent version, so an updated agent shows
+		// up right away – not only after the next font change, when it sends
+		// a report.
+		s.db.Exec(`UPDATE devices SET last_seen = ?, last_ip = ?,
+			agent_version = CASE WHEN ? != '' THEN ? ELSE agent_version END WHERE id = ?`,
+			now(), s.clientIP(r), d.Agent, d.Agent, d.ID)
 		if disabled {
 			// Suspended, not revoked: the agent removes its fonts but keeps the
 			// enrollment, so re-enabling the account restores everything.

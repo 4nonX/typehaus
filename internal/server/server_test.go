@@ -441,3 +441,44 @@ func TestAllFormatsAndPlatforms(t *testing.T) {
 		t.Fatalf("agent 0.2.0 must not get Type 1: %+v", old.Fonts)
 	}
 }
+
+// An updated agent shows its new version on the next check, even when no
+// font changed (the agent then sends no report).
+func TestAgentVersionFromEveryRequest(t *testing.T) {
+	_, ts, admin := newTestServer(t)
+	tok := enrollDevice(t, ts, admin)
+	check := func(ua string, etag string) string {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/agent/manifest", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("User-Agent", ua)
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("ETag")
+	}
+	version := func() string {
+		var devs []map[string]any
+		admin.do("GET", "/api/devices", nil, &devs)
+		if len(devs) != 1 {
+			t.Fatalf("devices: %v", devs)
+		}
+		return devs[0]["agent_version"].(string)
+	}
+	etag := check("typehaus-agent/0.2.0 (windows)", "")
+	if v := version(); v != "0.2.0" {
+		t.Fatalf("first check: %q", v)
+	}
+	check("typehaus-agent/0.3.0 (windows)", etag) // 304, no report
+	if v := version(); v != "0.3.0" {
+		t.Fatalf("after update: %q", v)
+	}
+	check("curl/8", etag) // not an agent: keep what we know
+	if v := version(); v != "0.3.0" {
+		t.Fatalf("foreign client changed the version: %q", v)
+	}
+}
