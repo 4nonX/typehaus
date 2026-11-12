@@ -50,13 +50,54 @@ func (p *winPlatform) fontDir() (string, error) {
 
 func (p *winPlatform) filePrefix() string { return "" }
 
+// winResource is the string AddFontResourceW expects: the file, or for
+// PostScript Type 1 "metrics.pfm|outlines.pfb".
+func winResource(f *Installed) (string, error) {
+	switch f.Kind {
+	case "type1":
+		pfm := extraWithExt(f, ".pfm")
+		if pfm == "" {
+			return "", errors.New("PostScript Type 1 fonts need their .pfm metrics file on Windows")
+		}
+		return pfm + "|" + f.Path, nil
+	case "pcf", "bdf":
+		return "", errors.New("X11 bitmap fonts can't be installed on Windows")
+	}
+	return f.Path, nil
+}
+
+func addFontResource(res string) bool {
+	ptr, err := windows.UTF16PtrFromString(res)
+	if err != nil {
+		return false
+	}
+	r, _, _ := procAddFontResourceW.Call(uintptr(unsafe.Pointer(ptr)))
+	return r != 0
+}
+
+func removeFontResource(res string) {
+	ptr, err := windows.UTF16PtrFromString(res)
+	if err != nil {
+		return
+	}
+	// a resource may have been added more than once; remove all references
+	for i := 0; i < 8; i++ {
+		if r, _, _ := procRemoveFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r == 0 {
+			break
+		}
+	}
+}
+
 func (p *winPlatform) install(f *Installed) error {
-	ptr, err := windows.UTF16PtrFromString(f.Path)
+	res, err := winResource(f)
 	if err != nil {
 		return err
 	}
-	if r, _, _ := procAddFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r == 0 {
-		return fmt.Errorf("AddFontResourceW rejected %s (unsupported or corrupt font)", filepath.Base(f.Path))
+	if !addFontResource(res) {
+		return fmt.Errorf("Windows rejected %s (unsupported or corrupt font)", filepath.Base(f.Path))
+	}
+	if f.Kind == "type1" {
+		return nil // no per-user registry for Type 1: re-added at every login (ReloadSession)
 	}
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, userFontsKey, registry.SET_VALUE)
 	if err != nil {
@@ -69,13 +110,8 @@ func (p *winPlatform) install(f *Installed) error {
 }
 
 func (p *winPlatform) uninstall(f *Installed) error {
-	if ptr, err := windows.UTF16PtrFromString(f.Path); err == nil {
-		// A resource may have been added more than once; remove all references.
-		for i := 0; i < 8; i++ {
-			if r, _, _ := procRemoveFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r == 0 {
-				break
-			}
-		}
+	if res, err := winResource(f); err == nil {
+		removeFontResource(res)
 	}
 	if f.RegName != "" {
 		if k, err := registry.OpenKey(registry.CURRENT_USER, userFontsKey, registry.SET_VALUE); err == nil {
@@ -88,7 +124,18 @@ func (p *winPlatform) uninstall(f *Installed) error {
 	if err := os.Remove(f.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	removeExtras(f)
 	return nil
+}
+
+// reload: per-user registration at logon covers TrueType/OpenType; bitmap
+// and Type 1 fonts are added to the session again by the agent.
+func (p *winPlatform) reload(f *Installed) bool {
+	if f.Kind != "type1" && f.Kind != "winfnt" {
+		return false
+	}
+	res, err := winResource(f)
+	return err == nil && addFontResource(res)
 }
 
 func (p *winPlatform) refresh() {

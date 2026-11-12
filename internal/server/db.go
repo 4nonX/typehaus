@@ -133,6 +133,15 @@ CREATE INDEX audit_ts ON audit(ts);
 ALTER TABLE user_groups ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
 CREATE INDEX fonts_psname ON fonts(postscript_name) WHERE postscript_name != '';
 `,
+	// 3: every font format – kind (sfnt, type1, winfnt, pcf, bdf), the
+	// platforms that can install it, the original format of converted
+	// uploads, and companion files (Type 1 metrics)
+	`
+ALTER TABLE fonts ADD COLUMN kind TEXT NOT NULL DEFAULT 'sfnt';
+ALTER TABLE fonts ADD COLUMN platforms TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN source_format TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN extras TEXT NOT NULL DEFAULT '[]';
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -156,8 +157,42 @@ func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, protocol.EnrollResponse{DeviceID: id, Token: tok, User: username})
 }
 
-// manifestFonts returns the distinct font files a user should have active.
-func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
+// agentSupportsKind reports whether an agent version can install a kind of
+// font. Agents before 0.3 know TrueType/OpenType and install other single
+// files (bitmap fonts) correctly too, but not Type 1 with metrics files.
+func agentSupportsKind(agentVersion, kind string) bool {
+	if kind != "type1" {
+		return true
+	}
+	v, ok := parseSemver(agentVersion)
+	if !ok {
+		return true // dev builds
+	}
+	return v[0] > 0 || v[1] >= 3
+}
+
+func parseSemver(s string) ([3]int, bool) {
+	var v [3]int
+	s = strings.TrimPrefix(s, "v")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return v, false
+	}
+	for i, p := range parts {
+		if _, err := fmt.Sscan(p, &v[i]); err != nil {
+			return v, false
+		}
+	}
+	return v, true
+}
+
+// manifestFonts returns the distinct font files a user should have active,
+// limited to formats the device's operating system (and agent) can install.
+// d may be nil (all platforms).
+func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.ManifestFont, error) {
 	var isAdmin bool
 	if err := s.db.QueryRow(`SELECT is_admin FROM users WHERE id = ?`, userID).Scan(&isAdmin); err != nil {
 		return nil, err
@@ -165,7 +200,8 @@ func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
 	where, vargs := visibleClause(&authUser{ID: userID, IsAdmin: isAdmin})
 	args := append([]any{userID}, vargs...)
 	// newest first, so the duplicate filter below keeps the newest upload
-	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name
+	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name,
+		f.kind, f.platforms, f.extras
 		FROM fonts f JOIN activations a ON a.font_id = f.id AND a.user_id = ?
 		WHERE `+where+` ORDER BY f.id DESC`, args...)
 	if err != nil {
@@ -177,9 +213,24 @@ func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
 	psSeen := map[string]bool{}
 	for rows.Next() {
 		var m protocol.ManifestFont
-		var ps string
-		if err := rows.Scan(&m.ID, &m.SHA256, &m.Filename, &m.Family, &m.Style, &m.FullName, &m.Format, &m.Size, &ps); err != nil {
+		var ps, platforms, extras string
+		if err := rows.Scan(&m.ID, &m.SHA256, &m.Filename, &m.Family, &m.Style, &m.FullName, &m.Format, &m.Size, &ps,
+			&m.Kind, &platforms, &extras); err != nil {
 			return nil, err
+		}
+		if d != nil {
+			if platforms != "" && d.Platform != "" && !strings.Contains(","+platforms+",", ","+d.Platform+",") {
+				continue // e.g. a Windows bitmap font for a Mac
+			}
+			if !agentSupportsKind(d.Agent, m.Kind) {
+				continue
+			}
+		}
+		if extras != "" && extras != "[]" {
+			json.Unmarshal([]byte(extras), &m.Extras)
+		}
+		if m.Kind == "sfnt" {
+			m.Kind = "" // keep the manifest identical for TrueType/OpenType (older agents)
 		}
 		// Safety net: never ship two files with the same PostScript name.
 		if ps != "" {
@@ -202,7 +253,7 @@ func (s *Server) manifestFonts(userID int64) ([]protocol.ManifestFont, error) {
 }
 
 func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *authDevice) {
-	fonts, err := s.manifestFonts(d.UserID)
+	fonts, err := s.manifestFonts(d.UserID, d)
 	if err != nil {
 		s.internalErr(w, err)
 		return
@@ -210,7 +261,10 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 	h := sha256.New()
 	fmt.Fprintf(h, "%d|%s|%d|%s|", protocol.Version, d.User, s.cfg.PollSeconds, Version)
 	for _, f := range fonts {
-		h.Write([]byte(f.SHA256 + f.Filename))
+		h.Write([]byte(f.SHA256 + f.Filename + f.Kind))
+		for _, e := range f.Extras {
+			h.Write([]byte(e.SHA256 + e.Ext))
+		}
 	}
 	etag := `"` + hex.EncodeToString(h.Sum(nil))[:32] + `"`
 	w.Header().Set("ETag", etag)
@@ -233,7 +287,7 @@ func (s *Server) handleAgentFont(w http.ResponseWriter, r *http.Request, d *auth
 		writeErr(w, 400, "bad hash")
 		return
 	}
-	fonts, err := s.manifestFonts(d.UserID)
+	fonts, err := s.manifestFonts(d.UserID, d)
 	if err != nil {
 		s.internalErr(w, err)
 		return
@@ -242,7 +296,11 @@ func (s *Server) handleAgentFont(w http.ResponseWriter, r *http.Request, d *auth
 	for _, f := range fonts {
 		if f.SHA256 == sha {
 			allowed = true
-			break
+		}
+		for _, e := range f.Extras {
+			if e.SHA256 == sha {
+				allowed = true
+			}
 		}
 	}
 	if !allowed {

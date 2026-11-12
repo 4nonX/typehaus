@@ -30,6 +30,18 @@ type ManifestFont struct {
 	FullName string `json:"full_name"`
 	Format   string `json:"format"`
 	Size     int64  `json:"size"`
+	// Kind is sfnt (TrueType/OpenType), type1, winfnt, pcf or bdf.
+	Kind string `json:"kind,omitempty"`
+	// Extras are companion files installed next to the font with the same
+	// base name, e.g. the .pfm/.afm metrics of a PostScript Type 1 font.
+	Extras []ManifestExtra `json:"extras,omitempty"`
+}
+
+// ManifestExtra is a companion file of a font.
+type ManifestExtra struct {
+	SHA256 string `json:"sha256"`
+	Ext    string `json:"ext"`
+	Size   int64  `json:"size"`
 }
 
 // Manifest is the complete desired state for a device.

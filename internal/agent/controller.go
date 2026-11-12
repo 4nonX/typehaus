@@ -245,6 +245,7 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 	a.OnApply = func(n int) {
 		c.update(func(s *Status) { s.Phase = PhaseSyncing })
 	}
+	a.ReloadSession() // Windows: bitmap and Type 1 fonts live per session
 	interval := 60 * time.Second
 	backoff := 0
 	for {

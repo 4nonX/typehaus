@@ -329,9 +329,11 @@ type authUser struct {
 }
 
 type authDevice struct {
-	ID     int64
-	UserID int64
-	User   string
+	ID       int64
+	UserID   int64
+	User     string
+	Platform string // windows, darwin, linux (from enrollment; "-machine" stripped)
+	Agent    string // agent version from the User-Agent header
 }
 
 func (s *Server) user(h func(http.ResponseWriter, *http.Request, *authUser)) http.Handler {
@@ -364,13 +366,17 @@ func (s *Server) device(h func(http.ResponseWriter, *http.Request, *authDevice))
 		}
 		d := &authDevice{}
 		var disabled bool
-		err := s.db.QueryRow(`SELECT d.id, d.user_id, u.username, u.disabled FROM devices d JOIN users u ON u.id = d.user_id
-			WHERE d.token_hash = ?`, hashToken(tok)).Scan(&d.ID, &d.UserID, &d.User, &disabled)
+		err := s.db.QueryRow(`SELECT d.id, d.user_id, u.username, u.disabled, d.platform FROM devices d JOIN users u ON u.id = d.user_id
+			WHERE d.token_hash = ?`, hashToken(tok)).Scan(&d.ID, &d.UserID, &d.User, &disabled, &d.Platform)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "device not enrolled or revoked")
 			return
 		}
 		s.db.Exec(`UPDATE devices SET last_seen = ?, last_ip = ? WHERE id = ?`, now(), s.clientIP(r), d.ID)
+		d.Platform = strings.TrimSuffix(d.Platform, "-machine")
+		if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "typehaus-agent/") {
+			d.Agent, _, _ = strings.Cut(strings.TrimPrefix(ua, "typehaus-agent/"), " ")
+		}
 		if disabled {
 			// Suspended, not revoked: the agent removes its fonts but keeps the
 			// enrollment, so re-enabling the account restores everything.

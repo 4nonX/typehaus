@@ -321,3 +321,123 @@ func TestSSOOnlyRequiresAdminGroup(t *testing.T) {
 		t.Fatal("expected startup error without local login and without OIDC")
 	}
 }
+
+func uploadFiles(t *testing.T, c *client, files map[string][]byte) []map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for n, d := range files {
+		fw, _ := mw.CreateFormFile("files", n)
+		fw.Write(d)
+	}
+	mw.Close()
+	req, _ := http.NewRequest("POST", c.base+"/api/fonts", &buf)
+	req.Header.Set("X-Typehaus", "1")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Results []map[string]any `json:"results"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	return out.Results
+}
+
+func fixture(t *testing.T, name string) []byte {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "fonts", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// Every format: converted web fonts, Windows bitmap fonts, PostScript Type 1
+// with metrics – and each device only gets what its OS can install.
+func TestAllFormatsAndPlatforms(t *testing.T) {
+	_, ts, admin := newTestServer(t)
+	pfa := []byte("%!PS-AdobeFont-1.0: Demo-Regular 001.000\n/FamilyName (Demo) readonly def\n/FullName (Demo Regular) readonly def\n/Weight (Regular) readonly def\n/FontName /Demo-Regular def\n")
+	results := uploadFiles(t, admin, map[string][]byte{
+		"Poppins-Regular.woff2":  fixture(t, "Poppins-Regular.woff2"),
+		"TypehausTestBitmap.fon": fixture(t, "TypehausTestBitmap.fon"),
+		"Demo-Regular.pfa":       pfa,
+		"Demo-Regular.afm":       []byte("StartFontMetrics 4.1\nFontName Demo-Regular\nEndFontMetrics\n"),
+		"Demo-Regular.pfm":       make([]byte, 200),
+		"Orphan.afm":             []byte("StartFontMetrics 4.1\n"),
+		"notes.txt":              []byte("not a font"),
+	})
+	status := map[string]string{}
+	for _, r := range results {
+		status[r["file"].(string)] = r["status"].(string)
+	}
+	t.Logf("results: %v", results)
+	if status["Poppins-Regular.woff2 → Poppins-Regular.ttf"] != "added" || status["TypehausTestBitmap.fon"] != "added" ||
+		status["Demo-Regular.pfa"] != "added" || status["orphan.afm"] != "error" {
+		t.Fatalf("unexpected upload results: %v", status)
+	}
+
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	var ids []int64
+	kinds := map[string]string{}
+	for _, f := range fonts {
+		ids = append(ids, f.ID)
+		kinds[f.Family] = f.Kind + "|" + f.Platforms + "|" + f.SourceFormat
+	}
+	if kinds["Poppins"] != "sfnt||woff2" || kinds["Typehaus Test Bitmap"] != "winfnt|windows,linux|" || kinds["Demo"] != "type1|windows,linux|" {
+		t.Fatalf("kinds/platforms: %v", kinds)
+	}
+	var col map[string]int64
+	admin.do("POST", "/api/collections", map[string]any{"name": "All", "everyone": true}, &col)
+	admin.do("POST", "/api/collections/"+itoa(col["id"])+"/fonts", map[string]any{"font_ids": ids}, nil)
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
+
+	enrollAs := func(platform string) string {
+		var code map[string]any
+		admin.do("POST", "/api/enroll-codes", nil, &code)
+		var er protocol.EnrollResponse
+		newClient(t, ts.URL).do("POST", "/api/agent/enroll", protocol.EnrollRequest{Code: code["code"].(string), Platform: platform}, &er)
+		return er.Token
+	}
+	families := func(m protocol.Manifest) map[string]protocol.ManifestFont {
+		out := map[string]protocol.ManifestFont{}
+		for _, f := range m.Fonts {
+			out[f.Family] = f
+		}
+		return out
+	}
+	_, mWin := getManifest(t, ts, enrollAs("windows"))
+	_, mMac := getManifest(t, ts, enrollAs("darwin"))
+	_, mLin := getManifest(t, ts, enrollAs("linux"))
+	w, m, l := families(mWin), families(mMac), families(mLin)
+	if len(w) != 3 || len(l) != 3 {
+		t.Fatalf("windows/linux should get all 3 fonts: %v / %v", w, l)
+	}
+	if len(m) != 1 || m["Poppins"].ID == 0 {
+		t.Fatalf("macOS should only get the OpenType font: %v", m)
+	}
+	if d := w["Demo"]; d.Kind != "type1" || len(d.Extras) != 2 {
+		t.Fatalf("Type 1 manifest entry should carry .afm and .pfm: %+v", d)
+	}
+	// the agent may download the companion files
+	req, _ := http.NewRequest("GET", ts.URL+"/api/agent/fonts/"+w["Demo"].Extras[0].SHA256, nil)
+	req.Header.Set("Authorization", "Bearer "+enrollAs("windows"))
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("companion download: %d", resp.StatusCode)
+	}
+	// an old agent (0.2.x) doesn't get Type 1
+	req, _ = http.NewRequest("GET", ts.URL+"/api/agent/manifest", nil)
+	req.Header.Set("Authorization", "Bearer "+enrollAs("windows"))
+	req.Header.Set("User-Agent", "typehaus-agent/0.2.0 (windows; amd64)")
+	resp, _ = http.DefaultClient.Do(req)
+	var old protocol.Manifest
+	json.NewDecoder(resp.Body).Decode(&old)
+	resp.Body.Close()
+	if _, has := families(old)["Demo"]; has || len(old.Fonts) != 2 {
+		t.Fatalf("agent 0.2.0 must not get Type 1: %+v", old.Fonts)
+	}
+}

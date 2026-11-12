@@ -235,6 +235,12 @@ async function loadLibrary() {
   for (const id of [...L.selected]) if (!ids.has(id)) L.selected.delete(id);
 }
 
+const KIND_LABEL = { type1: 'Type 1', winfnt: 'Windows bitmap', pcf: 'X11 bitmap', bdf: 'X11 bitmap' };
+function platformNames(p) {
+  const n = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
+  return p.split(',').map((x) => n[x] || x).join(' & ');
+}
+
 function groupFamilies(fonts) {
   const m = new Map();
   for (const f of fonts) {
@@ -280,9 +286,9 @@ async function renderLibrary(page) {
       </aside>
       <section>
         ${isAdmin ? `<div class="drop" id="drop">
-          <b>Drop fonts here</b> or click to upload. TTF, OTF, TTC or ZIP archives.
+          <b>Drop fonts here</b> or click to upload. Any format: TrueType, OpenType, WOFF/WOFF2, Mac suitcases, PostScript Type 1 (with .pfm/.afm), Windows .fon, X11 bitmap fonts – or ZIP archives and whole font folders.
           ${!['all', 'active'].includes(String(L.coll)) ? `<br><span class="small muted">Uploads are added to the selected collection.</span>` : ''}
-          <input type="file" id="file" multiple accept=".ttf,.otf,.ttc,.otc,.zip" hidden></div>` : ''}
+          <input type="file" id="file" multiple hidden></div>` : ''}
         <div class="toolbar">
           <input type="search" id="q" placeholder="Search fonts…" value="${esc(L.q)}">
           <input type="text" class="preview-text" id="pv" placeholder="Type to preview…" value="${esc(L.preview)}">
@@ -332,12 +338,14 @@ function drawFamilies() {
     const lic = admin && fam.rep.license_id ? L.licenses.find((l) => l.id === fam.rep.license_id) : null;
     const restricted = fam.faces.some((f) => f.fs_type & 0x2 && !(f.fs_type & 0xc));
     const conflict = fam.faces.some((f) => f.conflict);
+    const kinds = [...new Set(fam.faces.map((f) => f.kind))].filter((k) => k && k !== 'sfnt');
+    const plats = [...new Set(fam.faces.map((f) => f.platforms))].filter(Boolean);
     return `<div class="family" data-fam="${esc(fam.name)}">
       <div class="family-head">
         ${admin ? `<input type="checkbox" class="selfam" ${allSel ? 'checked' : ''} title="Select family">` : ''}
         <label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>
         <span class="name">${esc(fam.name)}</span>
-        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · <span class="badge">${esc(lic.name)}</span>` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}</span>
+        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · <span class="badge">${esc(lic.name)}</span>` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
@@ -346,7 +354,7 @@ function drawFamilies() {
       ${open ? `<div class="styles">${fam.faces.map((f) => `
         <div class="style-row" data-id="${f.id}">
           ${admin ? `<input type="checkbox" class="selface" ${L.selected.has(f.id) ? 'checked' : ''}>` : '<span></span>'}
-          <span class="sname" title="${esc(f.full_name)} · ${esc(f.postscript_name)} · v${esc(f.version)} · ${f.format.toUpperCase()} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
+          <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
           <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
           <label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>
         </div>`).join('')}</div>` : ''}
@@ -442,27 +450,82 @@ function setupUpload(page) {
   input.onchange = () => upload([...input.files]);
   ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-  drop.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
+  drop.addEventListener('drop', async (e) => {
+    // folders: walk them with the entries API (dataTransfer.files would
+    // only contain the folder itself)
+    const entries = [...e.dataTransfer.items].map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+    if (entries.some((en) => en.isDirectory)) {
+      drop.innerHTML = '<b>Reading folder…</b>';
+      upload(await filesFromEntries(entries));
+    } else {
+      upload([...e.dataTransfer.files]);
+    }
+  });
+}
+
+async function filesFromEntries(entries) {
+  const out = [];
+  const walk = async (en, prefix) => {
+    if (en.isFile) {
+      const f = await new Promise((res, rej) => en.file(res, rej)).catch(() => null);
+      if (f) out.push(new File([f], prefix + f.name, { type: f.type }));
+    } else if (en.isDirectory) {
+      const reader = en.createReader();
+      for (;;) {
+        const batch = await new Promise((res) => reader.readEntries(res, () => res([])));
+        if (!batch.length) break;
+        for (const c of batch) await walk(c, prefix + en.name + '/');
+      }
+    }
+  };
+  for (const en of entries) await walk(en, '');
+  return out;
+}
+
+// Upload in batches of ~64 MB so whole font folders fit the server's request
+// limit. Files sharing a base name (Type 1: .pfb + .pfm/.afm) stay together.
+const BATCH_BYTES = 64 << 20;
+function batches(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const base = f.name.toLowerCase().replace(/\.[^./]+$/, '');
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push(f);
+  }
+  const out = [];
+  let cur = [], size = 0;
+  for (const g of groups.values()) {
+    const gs = g.reduce((n, f) => n + f.size, 0);
+    if (cur.length && size + gs > BATCH_BYTES) { out.push(cur); cur = []; size = 0; }
+    cur.push(...g); size += gs;
+  }
+  if (cur.length) out.push(cur);
+  return out;
 }
 
 async function upload(files) {
+  files = files.filter((f) => f.size > 0);
   if (!files.length) return;
   const L = S.lib;
-  const fd = new FormData();
-  if (!['all', 'active'].includes(String(L.coll))) fd.append('collection_id', L.coll);
-  files.forEach((f) => fd.append('files', f, f.name));
   const drop = $('#drop');
-  if (drop) drop.innerHTML = `<b>Uploading ${plural(files.length, 'file')}…</b>`;
-  try {
-    const res = await api('POST', '/api/fonts', fd);
-    const r = res.results || [];
-    const added = r.filter((x) => x.status === 'added').length;
-    const dup = r.filter((x) => x.status === 'duplicate').length;
-    const errs = r.filter((x) => x.status === 'error');
-    toast(`${added} added${dup ? `, ${dup} already in library` : ''}${errs.length ? `, ${errs.length} failed` : ''}`);
-    errs.slice(0, 5).forEach((x) => toast(`${x.file}: ${x.message}`, true));
-    r.filter((x) => x.status === 'added' && x.message).slice(0, 3).forEach((x) => toast(`${x.file}: ${x.message}`));
-  } catch (e) { fail(e); }
+  const parts = batches(files);
+  const all = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (drop) drop.innerHTML = `<b>Uploading ${plural(files.length, 'file')}…</b>${parts.length > 1 ? ` <span class="muted">(${i + 1} of ${parts.length})</span>` : ''}`;
+    const fd = new FormData();
+    if (!['all', 'active'].includes(String(L.coll))) fd.append('collection_id', L.coll);
+    parts[i].forEach((f) => fd.append('files', f, f.name));
+    try {
+      const res = await api('POST', '/api/fonts', fd);
+      all.push(...(res.results || []));
+    } catch (e) { fail(e); }
+  }
+  const added = all.filter((x) => x.status === 'added').length;
+  const dup = all.filter((x) => x.status === 'duplicate').length;
+  const errs = all.filter((x) => x.status === 'error');
+  toast(`${added} added${dup ? `, ${dup} already in library` : ''}${errs.length ? `, ${errs.length} failed` : ''}`);
+  errs.slice(0, 5).forEach((x) => toast(`${x.file}: ${x.message}`, true));
+  all.filter((x) => x.status === 'added' && x.message).slice(0, 3).forEach((x) => toast(`${x.file}: ${x.message}`));
   L.loaded = false;
   renderLibrary($('#page'));
 }

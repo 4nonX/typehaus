@@ -13,6 +13,9 @@ import (
 
 func verifyUserInstalled(e *env, f installed) {
 	mustExist(f.Path)
+	for _, x := range f.Extras {
+		mustExist(x)
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		home, _ := os.UserHomeDir()
@@ -41,6 +44,9 @@ func verifyUserInstalled(e *env, f installed) {
 
 func verifyUserRemoved(e *env, f installed) {
 	mustNotExist(f.Path)
+	for _, x := range f.Extras {
+		mustNotExist(x)
+	}
 	if runtime.GOOS == "linux" {
 		out, _ := fcList(e)
 		if strings.Contains(string(out), f.Path) {
@@ -50,7 +56,7 @@ func verifyUserRemoved(e *env, f installed) {
 	}
 }
 
-func testMachine(e *env, ids []int64) {
+func testMachine(e *env, ids []int64, want int) {
 	fmt.Println("machine-wide mode is Windows-only; skipped")
 }
 

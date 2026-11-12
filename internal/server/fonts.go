@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,7 +52,10 @@ type fontRow struct {
 	FSType         int     `json:"fs_type"`
 	LicenseID      *int64  `json:"license_id"`
 	Activated      bool    `json:"activated"`
-	Conflict       bool    `json:"conflict"` // another file in the library has the same PostScript name
+	Conflict       bool    `json:"conflict"`      // another file in the library has the same PostScript name
+	Kind           string  `json:"kind"`          // sfnt, type1, winfnt, pcf, bdf
+	Platforms      string  `json:"platforms"`     // "" = all, else comma list
+	SourceFormat   string  `json:"source_format"` // original format when converted
 	Collections    []int64 `json:"collections"`
 	CreatedAt      int64   `json:"created_at"`
 }
@@ -72,7 +76,8 @@ func scanFont(sc interface{ Scan(...any) error }, f *fontRow) error {
 func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *authUser) {
 	where, args := visibleClause(u)
 	q := `SELECT ` + fontCols + `, EXISTS(SELECT 1 FROM activations a WHERE a.font_id = f.id AND a.user_id = ?),
-		f.postscript_name != '' AND EXISTS(SELECT 1 FROM fonts f2 WHERE f2.postscript_name = f.postscript_name AND f2.sha256 != f.sha256)
+		f.postscript_name != '' AND EXISTS(SELECT 1 FROM fonts f2 WHERE f2.postscript_name = f.postscript_name AND f2.sha256 != f.sha256),
+		f.kind, f.platforms, f.source_format
 		FROM fonts f WHERE ` + where
 	args = append([]any{u.ID}, args...)
 	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
@@ -101,7 +106,7 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		var lic sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 			&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
-			&f.Activated, &f.Conflict); err != nil {
+			&f.Activated, &f.Conflict, &f.Kind, &f.Platforms, &f.SourceFormat); err != nil {
 			rows.Close()
 			s.internalErr(w, err)
 			return
@@ -168,6 +173,9 @@ func (s *Server) handleFontFile(w http.ResponseWriter, r *http.Request, u *authU
 		return
 	}
 	ct := map[string]string{"ttf": "font/ttf", "otf": "font/otf", "ttc": "font/collection"}[format]
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
 	if r.URL.Query().Get("download") == "1" {
@@ -186,6 +194,22 @@ type uploadResult struct {
 	Message string   `json:"message,omitempty"`
 }
 
+// upFile is one file of an upload (a form file or a zip entry).
+type upFile struct {
+	name string // display name (path inside zip)
+	data []byte
+	// appleDouble marks a "__MACOSX/…/._Name" zip entry: the resource fork
+	// of a Mac file (font suitcases, LWFN), silently ignored if no font.
+	appleDouble bool
+}
+
+// extraFile is a companion stored alongside a font (Type 1 metrics).
+type extraFile struct {
+	SHA256 string `json:"sha256"`
+	Ext    string `json:"ext"`
+	Size   int    `json:"size"`
+}
+
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, u *authUser) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadMB<<20)
 	mr, err := r.MultipartReader()
@@ -195,7 +219,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, u *authUse
 	}
 	var collection int64
 	var results []uploadResult
-	var added []int64
+	var files []upFile
 	for {
 		p, err := mr.NextPart()
 		if err == io.EOF {
@@ -213,10 +237,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, u *authUse
 		if p.FileName() == "" {
 			continue
 		}
-		res, ids := s.ingestPart(p, u)
-		results = append(results, res...)
-		added = append(added, ids...)
+		fs, errRes := s.readPart(p)
+		files = append(files, fs...)
+		results = append(results, errRes...)
 	}
+	res, added := s.ingestBatch(files, u)
+	results = append(results, res...)
 	if collection > 0 && len(added) > 0 {
 		for _, id := range added {
 			s.db.Exec(`INSERT OR IGNORE INTO collection_fonts (collection_id, font_id) VALUES (?, ?)`, collection, id)
@@ -225,82 +251,180 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, u *authUse
 	writeJSON(w, 200, map[string]any{"results": results, "font_ids": added})
 }
 
-func (s *Server) ingestPart(p *multipart.Part, u *authUser) ([]uploadResult, []int64) {
+// readPart reads a form file; zip archives are expanded.
+func (s *Server) readPart(p *multipart.Part) ([]upFile, []uploadResult) {
 	name := filepath.Base(strings.ReplaceAll(p.FileName(), "\\", "/"))
-	ext := strings.ToLower(filepath.Ext(name))
-	if ext == ".zip" {
-		tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "upload-*.zip")
+	if strings.ToLower(filepath.Ext(name)) != ".zip" {
+		data, err := io.ReadAll(io.LimitReader(p, maxFontFile+1))
 		if err != nil {
-			return []uploadResult{{File: name, Status: "error", Message: "server storage error"}}, nil
+			return nil, []uploadResult{{File: name, Status: "error", Message: err.Error()}}
 		}
-		defer os.Remove(tmp.Name())
-		defer tmp.Close()
-		n, err := io.Copy(tmp, p)
+		if len(data) > maxFontFile {
+			return nil, []uploadResult{{File: name, Status: "error", Message: "file too large"}}
+		}
+		return []upFile{{name: name, data: data}}, nil
+	}
+	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "upload-*.zip")
+	if err != nil {
+		return nil, []uploadResult{{File: name, Status: "error", Message: "server storage error"}}
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	n, err := io.Copy(tmp, p)
+	if err != nil {
+		return nil, []uploadResult{{File: name, Status: "error", Message: err.Error()}}
+	}
+	zr, err := zip.NewReader(tmp, n)
+	if err != nil {
+		return nil, []uploadResult{{File: name, Status: "error", Message: "not a valid zip file"}}
+	}
+	var files []upFile
+	var errs []uploadResult
+	for _, zf := range zr.File {
+		zn := zf.Name
+		if zf.FileInfo().IsDir() || zf.UncompressedSize64 == 0 {
+			continue
+		}
+		base := path.Base(zn)
+		ad := strings.HasPrefix(base, "._")
+		if strings.Contains(zn, "__MACOSX/") && !ad {
+			continue
+		}
+		if zf.UncompressedSize64 > maxFontFile {
+			errs = append(errs, uploadResult{File: zn, Status: "error", Message: "file too large"})
+			continue
+		}
+		rc, err := zf.Open()
 		if err != nil {
-			return []uploadResult{{File: name, Status: "error", Message: err.Error()}}, nil
+			errs = append(errs, uploadResult{File: zn, Status: "error", Message: err.Error()})
+			continue
 		}
-		zr, err := zip.NewReader(tmp, n)
+		data, err := io.ReadAll(io.LimitReader(rc, maxFontFile+1))
+		rc.Close()
 		if err != nil {
-			return []uploadResult{{File: name, Status: "error", Message: "not a valid zip file"}}, nil
+			errs = append(errs, uploadResult{File: zn, Status: "error", Message: err.Error()})
+			continue
 		}
-		var results []uploadResult
-		var ids []int64
-		for _, zf := range zr.File {
-			zn := zf.Name
-			if zf.FileInfo().IsDir() || strings.Contains(zn, "__MACOSX/") || strings.HasPrefix(path.Base(zn), "._") {
-				continue
+		if ad {
+			zn = path.Join(path.Dir(strings.Replace(zn, "__MACOSX/", "", 1)), strings.TrimPrefix(base, "._"))
+		}
+		files = append(files, upFile{name: zn, data: data, appleDouble: ad})
+	}
+	return files, errs
+}
+
+func companionKey(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))
+}
+
+// ingestBatch imports all files of one upload. PostScript Type 1 metrics
+// (.pfm/.afm/.inf) are matched to their font by file name.
+func (s *Server) ingestBatch(files []upFile, u *authUser) ([]uploadResult, []int64) {
+	companions := map[string]map[string][]byte{} // key → ext → data
+	var fonts []upFile
+	for _, f := range files {
+		ext := strings.ToLower(path.Ext(f.name))
+		if fontmeta.CompanionExts[ext] && !f.appleDouble {
+			k := companionKey(f.name)
+			if companions[k] == nil {
+				companions[k] = map[string][]byte{}
 			}
-			switch strings.ToLower(path.Ext(zn)) {
-			case ".ttf", ".otf", ".ttc", ".otc":
-			default:
-				continue
+			companions[k][ext] = f.data
+			continue
+		}
+		fonts = append(fonts, f)
+	}
+	used := map[string]bool{}
+	var results []uploadResult
+	var ids []int64
+	found := false
+	for _, f := range fonts {
+		decoded, err := fontmeta.Decode(f.name, f.data)
+		if errors.Is(err, fontmeta.ErrNotFont) {
+			if !f.appleDouble && len(files) == 1 {
+				results = append(results, uploadResult{File: f.name, Status: "error",
+					Message: "not a font file (supported: TrueType, OpenType, WOFF/WOFF2/EOT, Mac .dfont and suitcases, PostScript Type 1, Windows .fon/.fnt, X11 .pcf/.bdf)"})
 			}
-			if zf.UncompressedSize64 > maxFontFile {
-				results = append(results, uploadResult{File: zn, Status: "error", Message: "file too large"})
-				continue
+			continue
+		}
+		if err != nil {
+			if !f.appleDouble {
+				results = append(results, uploadResult{File: f.name, Status: "error", Message: err.Error()})
 			}
-			rc, err := zf.Open()
-			if err != nil {
-				results = append(results, uploadResult{File: zn, Status: "error", Message: err.Error()})
-				continue
+			continue
+		}
+		found = true
+		key := companionKey(f.name)
+		for _, df := range decoded {
+			var extras map[string][]byte
+			if df.Kind == fontmeta.KindType1 {
+				extras = companions[key]
+				used[key] = true
 			}
-			data, err := io.ReadAll(io.LimitReader(rc, maxFontFile+1))
-			rc.Close()
-			if err != nil {
-				results = append(results, uploadResult{File: zn, Status: "error", Message: err.Error()})
-				continue
-			}
-			res, newIDs := s.ingestFont(path.Base(zn), data, u)
-			res.File = zn
+			res, newIDs := s.storeFont(f.name, df, extras, u)
 			results = append(results, res)
 			ids = append(ids, newIDs...)
 		}
-		if len(results) == 0 {
-			results = append(results, uploadResult{File: name, Status: "error", Message: "zip contains no TTF/OTF/TTC fonts"})
+	}
+	for k, c := range companions {
+		if !used[k] {
+			for ext := range c {
+				results = append(results, uploadResult{File: k + ext, Status: "error",
+					Message: "metrics file without its font – upload it together with the matching .pfb or .pfa"})
+			}
 		}
-		return results, ids
 	}
-	data, err := io.ReadAll(io.LimitReader(p, maxFontFile+1))
-	if err != nil {
-		return []uploadResult{{File: name, Status: "error", Message: err.Error()}}, nil
+	if !found && len(results) == 0 {
+		results = append(results, uploadResult{File: "upload", Status: "error", Message: "no font files found"})
 	}
-	res, ids := s.ingestFont(name, data, u)
-	return []uploadResult{res}, ids
+	return results, ids
 }
 
-func (s *Server) ingestFont(name string, data []byte, u *authUser) (uploadResult, []int64) {
-	res := uploadResult{File: name}
-	if len(data) > maxFontFile {
-		res.Status, res.Message = "error", "file too large"
-		return res, nil
-	}
-	info, err := fontmeta.Parse(data)
-	if err != nil {
-		res.Status, res.Message = "error", err.Error()
-		return res, nil
-	}
+// storeFile writes a blob into the content-addressed store.
+func (s *Server) storeFile(data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
+	dst := s.blobPath(sha)
+	if _, err := os.Stat(dst); err == nil {
+		return sha, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "font-*")
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(tmp, bytes.NewReader(data))
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), dst)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return sha, nil
+}
+
+var kindLabels = map[fontmeta.Kind]string{
+	fontmeta.KindType1: "PostScript Type 1", fontmeta.KindWinFNT: "Windows bitmap font",
+	fontmeta.KindPCF: "X11 bitmap font", fontmeta.KindBDF: "X11 bitmap font",
+}
+
+func (s *Server) storeFont(uploadName string, df fontmeta.File, extras map[string][]byte, u *authUser) (uploadResult, []int64) {
+	res := uploadResult{File: uploadName}
+	if df.Source != "" && !strings.EqualFold(uploadName, df.Name) {
+		res.File = uploadName + " → " + df.Name
+	}
+	sha, err := s.storeFile(df.Data)
+	if err != nil {
+		s.log.Error("store font", "err", err)
+		res.Status, res.Message = "error", "storage error"
+		return res, nil
+	}
 
 	var exists int
 	s.db.QueryRow(`SELECT COUNT(*) FROM fonts WHERE sha256 = ?`, sha).Scan(&exists)
@@ -319,42 +443,39 @@ func (s *Server) ingestFont(name string, data []byte, u *authUser) (uploadResult
 		return res, ids
 	}
 
-	// write blob atomically
-	dst := s.blobPath(sha)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-		res.Status, res.Message = "error", "storage error"
-		return res, nil
-	}
-	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "font-*")
-	if err == nil {
-		_, err = io.Copy(tmp, bytes.NewReader(data))
-		if cerr := tmp.Close(); err == nil {
-			err = cerr
+	// companions (Type 1 metrics)
+	ex := []extraFile{}
+	hasPFM := false
+	faces := df.Faces
+	for ext, data := range extras {
+		esha, err := s.storeFile(data)
+		if err != nil {
+			res.Status, res.Message = "error", "storage error"
+			return res, nil
 		}
-		if err == nil {
-			err = os.Rename(tmp.Name(), dst)
+		ex = append(ex, extraFile{SHA256: esha, Ext: ext, Size: len(data)})
+		if ext == ".pfm" {
+			hasPFM = true
 		}
 	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		s.log.Error("store font", "err", err)
-		res.Status, res.Message = "error", "storage error"
-		return res, nil
-	}
+	exJSON, _ := json.Marshal(ex)
+	platforms := strings.Join(df.Kind.Platforms(hasPFM), ",")
 
-	clean := sanitizeFilename(name, string(info.Format))
+	clean := sanitizeFilename(df.Name, df.Format)
 	var ids []int64
 	tx, err := s.db.Begin()
 	if err != nil {
 		res.Status, res.Message = "error", "database error"
 		return res, nil
 	}
-	for i, f := range info.Faces {
+	for i, f := range faces {
 		r, err := tx.Exec(`INSERT INTO fonts (sha256, face_index, filename, format, size, family, style, full_name, postscript_name,
-			version, designer, manufacturer, copyright, license_text, license_url, weight, italic, fs_type, uploaded_by, created_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sha, i, clean, string(info.Format), len(data), f.Family, f.Style, f.FullName, f.PostScriptName,
-			f.Version, f.Designer, f.Manufacturer, f.Copyright, f.License, f.LicenseURL, f.Weight, f.Italic, f.FSType, u.ID, now())
+			version, designer, manufacturer, copyright, license_text, license_url, weight, italic, fs_type, uploaded_by, created_at,
+			kind, platforms, source_format, extras)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sha, i, clean, df.Format, len(df.Data), f.Family, f.Style, f.FullName, f.PostScriptName,
+			f.Version, f.Designer, f.Manufacturer, f.Copyright, f.License, f.LicenseURL, f.Weight, f.Italic, f.FSType, u.ID, now(),
+			string(df.Kind), platforms, df.Source, string(exJSON))
 		if err != nil {
 			tx.Rollback()
 			res.Status, res.Message = "error", "database error"
@@ -370,8 +491,18 @@ func (s *Server) ingestFont(name string, data []byte, u *authUser) (uploadResult
 		return res, nil
 	}
 	res.Status = "added"
+	var notes []string
+	if df.Source != "" && df.Kind == fontmeta.KindSFNT {
+		notes = append(notes, "converted from "+strings.ToUpper(df.Source)+" to "+strings.ToUpper(df.Format))
+	}
+	if label := kindLabels[df.Kind]; label != "" {
+		notes = append(notes, label+" – installs on "+platformList(platforms))
+		if df.Kind == fontmeta.KindType1 && !hasPFM {
+			notes = append(notes, "add the matching .pfm to install it on Windows too")
+		}
+	}
 	var dupes []string
-	for _, f := range info.Faces {
+	for _, f := range faces {
 		if f.PostScriptName == "" {
 			continue
 		}
@@ -382,10 +513,26 @@ func (s *Server) ingestFont(name string, data []byte, u *authUser) (uploadResult
 		}
 	}
 	if len(dupes) > 0 {
-		res.Message = "same PostScript name as " + strings.Join(dupes, ", ") + " – only one of them can be active at a time"
+		notes = append(notes, "same PostScript name as "+strings.Join(dupes, ", ")+" – only one of them can be active at a time")
 	}
+	res.Message = strings.Join(notes, "; ")
 	s.audit(u, "font.upload", "%s: %s", clean, strings.Join(res.Faces, ", "))
 	return res, ids
+}
+
+func platformList(p string) string {
+	if p == "" {
+		return "Windows, macOS and Linux"
+	}
+	names := map[string]string{"windows": "Windows", "darwin": "macOS", "linux": "Linux"}
+	var out []string
+	for _, x := range strings.Split(p, ",") {
+		out = append(out, names[x])
+	}
+	if len(out) == 1 {
+		return out[0] + " only"
+	}
+	return strings.Join(out, " and ")
 }
 
 func sanitizeFilename(name, format string) string {
@@ -451,26 +598,34 @@ func (s *Server) handleDeleteFonts(w http.ResponseWriter, r *http.Request, u *au
 	args := int64Args(req.FontIDs)
 	var shas []string
 	var names []string
-	rows, err := s.db.Query(`SELECT DISTINCT sha256, full_name FROM fonts WHERE id IN (`+ph+`)`, args...)
+	var extraShas []string
+	rows, err := s.db.Query(`SELECT DISTINCT sha256, full_name, extras FROM fonts WHERE id IN (`+ph+`)`, args...)
 	if err != nil {
 		s.internalErr(w, err)
 		return
 	}
 	for rows.Next() {
-		var sha, n string
-		rows.Scan(&sha, &n)
+		var sha, n, ex string
+		rows.Scan(&sha, &n, &ex)
 		shas = append(shas, sha)
 		names = append(names, n)
+		var extras []extraFile
+		if json.Unmarshal([]byte(ex), &extras) == nil {
+			for _, e := range extras {
+				extraShas = append(extraShas, e.SHA256)
+			}
+		}
 	}
 	rows.Close()
 	if _, err := s.db.Exec(`DELETE FROM fonts WHERE id IN (`+ph+`)`, args...); err != nil {
 		s.internalErr(w, err)
 		return
 	}
-	// remove blobs no longer referenced (e.g. all faces of a TTC deleted)
-	for _, sha := range shas {
+	// remove blobs no longer referenced (e.g. all faces of a TTC deleted, or
+	// the metrics files of a Type 1 font)
+	for _, sha := range append(shas, extraShas...) {
 		var n int
-		s.db.QueryRow(`SELECT COUNT(*) FROM fonts WHERE sha256 = ?`, sha).Scan(&n)
+		s.db.QueryRow(`SELECT COUNT(*) FROM fonts WHERE sha256 = ? OR instr(extras, ?) > 0`, sha, sha).Scan(&n)
 		if n == 0 {
 			if err := os.Remove(s.blobPath(sha)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				s.log.Warn("remove blob", "sha", sha, "err", err)

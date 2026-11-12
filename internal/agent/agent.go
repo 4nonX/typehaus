@@ -57,6 +57,10 @@ type Installed struct {
 	Style    string `json:"style"`
 	// RegName is the per-user registry value name (Windows only).
 	RegName string `json:"reg_name,omitempty"`
+	// Kind: "" (TrueType/OpenType), type1, winfnt, pcf, bdf.
+	Kind string `json:"kind,omitempty"`
+	// Extras are companion files (Type 1 metrics) installed with the font.
+	Extras []string `json:"extras,omitempty"`
 	// PendingRemoval is set when a deactivated font could not be removed yet
 	// (e.g. file locked by a running application).
 	PendingRemoval bool `json:"pending_removal,omitempty"`
@@ -497,42 +501,89 @@ func (a *Agent) installOne(ctx context.Context, mf protocol.ManifestFont) (*Inst
 	if name == "" || name == "." {
 		name = "font." + mf.Format
 	}
-	final := filepath.Join(dir, a.sys.filePrefix()+mf.SHA256[:8]+"-"+name)
+	// companions share the font's base name (Windows pairs x.pfm|x.pfb,
+	// FreeType finds x.afm next to x.pfb)
+	stem := a.sys.filePrefix() + mf.SHA256[:8] + "-" + strings.TrimSuffix(name, filepath.Ext(name))
+	final := filepath.Join(dir, stem+filepath.Ext(name))
 
-	resp, err := a.do(ctx, "GET", "/api/agent/fonts/"+mf.SHA256, nil, nil)
-	if err != nil {
+	inst := &Installed{SHA256: mf.SHA256, Path: final, FullName: mf.FullName, Family: mf.Family, Style: mf.Style, Kind: mf.Kind}
+	cleanup := func() {
+		os.Remove(final)
+		for _, e := range inst.Extras {
+			os.Remove(e)
+		}
+	}
+	if err := a.download(ctx, mf.SHA256, dir, final); err != nil {
 		return nil, err
+	}
+	for _, e := range mf.Extras {
+		ext := strings.ToLower(e.Ext)
+		if !strings.HasPrefix(ext, ".") || unsafeName.MatchString(ext) || len(ext) > 6 {
+			continue
+		}
+		p := filepath.Join(dir, stem+ext)
+		if err := a.download(ctx, e.SHA256, dir, p); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("metrics file %s: %w", ext, err)
+		}
+		inst.Extras = append(inst.Extras, p)
+	}
+	if err := a.sys.install(inst); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return inst, nil
+}
+
+// download fetches a file by hash into dst, verifying its SHA-256.
+func (a *Agent) download(ctx context.Context, sha, dir, dst string) error {
+	resp, err := a.do(ctx, "GET", "/api/agent/fonts/"+sha, nil, nil)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("download: %s", apiError(resp))
+		return fmt.Errorf("download: %s", apiError(resp))
 	}
 	tmp, err := os.CreateTemp(dir, ".typehaus-dl-*")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	h := sha256.New()
 	_, err = io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, 128<<20))
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil && hex.EncodeToString(h.Sum(nil)) != mf.SHA256 {
+	if err == nil && hex.EncodeToString(h.Sum(nil)) != sha {
 		err = errors.New("checksum mismatch")
 	}
 	if err == nil {
-		os.Remove(final)
-		err = os.Rename(tmp.Name(), final)
+		os.Remove(dst)
+		err = os.Rename(tmp.Name(), dst)
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
-		return nil, err
 	}
-	inst := &Installed{SHA256: mf.SHA256, Path: final, FullName: mf.FullName, Family: mf.Family, Style: mf.Style}
-	if err := a.sys.install(inst); err != nil {
-		os.Remove(final)
-		return nil, err
+	return err
+}
+
+// ReloadSession re-registers fonts that Windows only keeps for the current
+// session (bitmap .fon and PostScript Type 1 installed per user). Called
+// when the agent starts, i.e. at every login.
+func (a *Agent) ReloadSession() {
+	st, err := LoadState()
+	if err != nil {
+		return
 	}
-	return inst, nil
+	n := 0
+	for _, f := range st.Fonts {
+		if !f.PendingRemoval && a.sys.reload(f) {
+			n++
+		}
+	}
+	if n > 0 {
+		a.sys.refresh()
+	}
 }
 
 func (a *Agent) report(ctx context.Context, st *State, errs []protocol.ReportError) error {
@@ -580,6 +631,7 @@ func (a *Agent) RemoveAll() (removed int, failed int, err error) {
 
 // Run syncs in a loop until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
+	a.ReloadSession()
 	interval := 60 * time.Second
 	backoff := 0
 	for {
@@ -643,5 +695,27 @@ type platform interface {
 	filePrefix() string
 	install(*Installed) error
 	uninstall(*Installed) error
+	// reload re-registers a font for the current session if the OS doesn't
+	// persist it; reports whether it did anything.
+	reload(*Installed) bool
 	refresh()
+}
+
+// removeExtras deletes a font's companion files.
+func removeExtras(f *Installed) {
+	for _, e := range f.Extras {
+		if err := os.Remove(e); err != nil && !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+	}
+}
+
+// extraWithExt returns the companion file with the given extension.
+func extraWithExt(f *Installed, ext string) string {
+	for _, e := range f.Extras {
+		if strings.EqualFold(filepath.Ext(e), ext) {
+			return e
+		}
+	}
+	return ""
 }

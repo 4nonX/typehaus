@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -27,7 +28,7 @@ import (
 var (
 	serverBin = flag.String("server", "", "path to typehaus-server")
 	agentBin  = flag.String("agent", "", "path to typehaus-agent")
-	fontPath  = flag.String("font", "", "TTF/OTF file to use")
+	fontPath  = flag.String("font", "", "font file(s) to use, comma-separated (any format; uploaded together)")
 	machine   = flag.Bool("machine", false, "also test the Windows all-users service (admin)")
 )
 
@@ -81,15 +82,30 @@ func main() {
 	e := &env{base: base, hc: &http.Client{Jar: jar, Timeout: 30 * time.Second}, home: filepath.Join(tmp, "agent")}
 	e.extra = []string{"TYPEHAUS_AGENT_HOME=" + e.home, "XDG_DATA_HOME=" + filepath.Join(tmp, "xdg-data"), "XDG_CONFIG_HOME=" + filepath.Join(tmp, "xdg-config")}
 
-	step("sign in and upload " + filepath.Base(*fontPath))
+	step("sign in and upload " + *fontPath)
 	e.api("POST", "/api/auth/login", map[string]string{"username": "admin", "password": "e2e-password-123"}, nil)
-	ids := e.upload(*fontPath)
+	ids := e.upload(strings.Split(*fontPath, ","))
 	var fonts []struct {
-		ID     int64  `json:"id"`
-		Family string `json:"family"`
+		ID        int64  `json:"id"`
+		SHA256    string `json:"sha256"`
+		Family    string `json:"family"`
+		Kind      string `json:"kind"`
+		Platforms string `json:"platforms"`
 	}
 	e.api("GET", "/api/fonts", nil, &fonts)
-	e.family = fonts[0].Family
+	if len(ids) == 0 || len(fonts) == 0 {
+		fail("nothing imported")
+	}
+	expected := map[string]bool{} // font files this OS must install
+	for _, f := range fonts {
+		fmt.Printf("library: %s (%s, platforms %q)\n", f.Family, f.Kind, f.Platforms)
+		if f.Platforms == "" || strings.Contains(","+f.Platforms+",", ","+runtime.GOOS+",") {
+			expected[f.SHA256] = true
+		}
+		if f.Kind == "sfnt" && e.family == "" {
+			e.family = f.Family
+		}
+	}
 	var col map[string]int64
 	e.api("POST", "/api/collections", map[string]any{"name": "E2E", "everyone": true}, &col)
 	e.api("POST", fmt.Sprintf("/api/collections/%d/fonts", col["id"]), map[string]any{"font_ids": ids}, nil)
@@ -98,12 +114,17 @@ func main() {
 	step("enroll the agent and install for this user")
 	e.agent("enroll", "--server", base, "--code", e.code(), "--name", "e2e")
 	inst := e.installed(e.home)
-	if len(inst) != 1 {
-		fail("expected 1 installed font, got %d", len(inst))
+	if len(inst) != len(expected) {
+		fail("expected %d installed font file(s) on %s, got %d", len(expected), runtime.GOOS, len(inst))
 	}
-	verifyUserInstalled(e, inst[0])
+	for _, f := range inst {
+		if !expected[f.SHA256] {
+			fail("%s should not be installed on %s", f.Path, runtime.GOOS)
+		}
+		verifyUserInstalled(e, f)
+	}
 	out := e.agent("status")
-	if !strings.Contains(out, "Installed:  1 font file") {
+	if !strings.Contains(out, fmt.Sprintf("Installed:  %d font file", len(expected))) {
 		fail("status output unexpected:\n%s", out)
 	}
 
@@ -113,7 +134,9 @@ func main() {
 	if n := len(e.installed(e.home)); n != 0 {
 		fail("expected 0 installed fonts after deactivation, got %d", n)
 	}
-	verifyUserRemoved(e, inst[0])
+	for _, f := range inst {
+		verifyUserRemoved(e, f)
+	}
 
 	step("revoke the device: agent must refuse to sync")
 	e.api("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
@@ -131,11 +154,13 @@ func main() {
 	if n := len(e.installed(e.home)); n != 0 {
 		fail("unenroll should remove all fonts, %d left", n)
 	}
-	verifyUserRemoved(e, inst[0])
+	for _, f := range inst {
+		verifyUserRemoved(e, f)
+	}
 
 	if *machine {
 		step("machine-wide service (all users)")
-		testMachine(e, ids)
+		testMachine(e, ids, len(expected))
 	}
 	fmt.Println("\nE2E PASSED")
 }
@@ -189,13 +214,15 @@ func (e *env) api(method, path string, body, out any) {
 	}
 }
 
-func (e *env) upload(path string) []int64 {
-	data, err := os.ReadFile(path)
-	check(err)
+func (e *env) upload(paths []string) []int64 {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	fw, _ := mw.CreateFormFile("files", filepath.Base(path))
-	fw.Write(data)
+	for _, p := range paths {
+		data, err := os.ReadFile(strings.TrimSpace(p))
+		check(err)
+		fw, _ := mw.CreateFormFile("files", filepath.Base(p))
+		fw.Write(data)
+	}
 	mw.Close()
 	req, _ := http.NewRequest("POST", e.base+"/api/fonts", &buf)
 	req.Header.Set("X-Typehaus", "1")
@@ -210,8 +237,11 @@ func (e *env) upload(path string) []int64 {
 		} `json:"results"`
 	}
 	json.NewDecoder(resp.Body).Decode(&out)
-	if len(out.FontIDs) == 0 {
-		fail("upload failed: %+v", out.Results)
+	fmt.Printf("upload results: %+v\n", out.Results)
+	for _, r := range out.Results {
+		if r.Status == "error" {
+			fail("upload error: %+v", r)
+		}
 	}
 	return out.FontIDs
 }
@@ -237,11 +267,13 @@ func (e *env) agent(args ...string) string        { return e.run(false, args...)
 func (e *env) agentMayFail(args ...string) string { return e.run(true, args...) }
 
 type installed struct {
-	SHA256   string `json:"sha256"`
-	Path     string `json:"path"`
-	FullName string `json:"full_name"`
-	Family   string `json:"family"`
-	RegName  string `json:"reg_name"`
+	SHA256   string   `json:"sha256"`
+	Path     string   `json:"path"`
+	FullName string   `json:"full_name"`
+	Family   string   `json:"family"`
+	RegName  string   `json:"reg_name"`
+	Kind     string   `json:"kind"`
+	Extras   []string `json:"extras"`
 }
 
 func (e *env) installed(dir string) []installed {

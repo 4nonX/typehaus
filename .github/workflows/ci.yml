@@ -57,9 +57,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install fontconfig
+      - name: Install fontconfig and fonts in other formats
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fontconfig
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fontconfig xfonts-base fonts-urw-base35
       - name: Build
         shell: bash
         run: |
@@ -67,12 +67,31 @@ jobs:
           go build -o "bin/typehaus-server$ext" ./cmd/typehaus-server
           go build -o "bin/typehaus-agent$ext" ./cmd/typehaus-agent
           go build -o "bin/e2e$ext" ./tools/e2e
-      - name: End-to-end test (per-user install, removal, revocation)
+      - name: Pick test fonts (every format this OS handles)
+        id: fonts
+        shell: bash
+        run: |
+          fonts="testdata/fonts/Poppins-Regular.woff2"
+          case "$RUNNER_OS" in
+            Linux)
+              pcf=$(ls /usr/share/fonts/X11/misc/*.pcf.gz | head -1)
+              t1=$(ls /usr/share/fonts/X11/Type1/*.t1 /usr/share/fonts/type1/urw-base35/*.t1 2>/dev/null | head -1)
+              afm="${t1%.t1}.afm"
+              fonts="$fonts,$pcf"
+              [ -n "$t1" ] && fonts="$fonts,$t1"
+              [ -f "$afm" ] && fonts="$fonts,$afm"
+              ;;
+            Windows) fonts="$fonts,C:/Windows/Fonts/8514oem.fon" ;;
+            macOS)   fonts="$fonts,testdata/fonts/TypehausTestBitmap.fon" ;;  # must NOT be installed on macOS
+          esac
+          echo "list=$fonts" >> "$GITHUB_OUTPUT"
+          echo "$fonts"
+      - name: End-to-end test (install, removal, revocation)
         if: runner.os != 'Windows'
-        run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font testdata/fonts/Poppins-Regular.ttf
+        run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font "${{ steps.fonts.outputs.list }}"
       - name: End-to-end test incl. all-users service (Windows, admin)
         if: runner.os == 'Windows'
-        run: bin\e2e.exe -server bin\typehaus-server.exe -agent bin\typehaus-agent.exe -font testdata\fonts\Poppins-Regular.ttf -machine
+        run: bin\e2e.exe -server bin\typehaus-server.exe -agent bin\typehaus-agent.exe -font "${{ steps.fonts.outputs.list }}" -machine
 
   font-corpus:
     name: font corpus (${{ matrix.os }})
@@ -92,6 +111,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Parse every system font
+      - name: Install more font formats (Type 1, X11 bitmap, OpenType)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xfonts-base xfonts-75dpi fonts-urw-base35 gsfonts fonts-noto-color-emoji || true
+      - name: Every system font must import
         shell: bash
-        run: go run ./tools/fontscan -gha ${{ matrix.dirs }}
+        run: go run ./tools/fontscan -strict -gha ${{ matrix.dirs }}

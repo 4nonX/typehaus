@@ -27,13 +27,21 @@ func (p *darwinPlatform) fontDir() (string, error) {
 
 func (p *darwinPlatform) filePrefix() string { return "typehaus-" }
 
-func (p *darwinPlatform) install(*Installed) error { return nil }
+func (p *darwinPlatform) install(f *Installed) error {
+	if f.Kind != "" && f.Kind != "sfnt" {
+		return errors.New("this font format can't be installed on macOS")
+	}
+	return nil
+}
 
 func (p *darwinPlatform) uninstall(f *Installed) error {
 	if err := os.Remove(f.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	removeExtras(f)
 	return nil
 }
+
+func (p *darwinPlatform) reload(*Installed) bool { return false }
 
 func (p *darwinPlatform) refresh() {}

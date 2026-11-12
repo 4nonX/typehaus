@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -90,9 +89,10 @@ func ensureDirACL(dir, sddl string) error {
 }
 
 type machineFont struct {
-	SHA256 string `json:"sha256"`
-	Path   string `json:"path"`
-	Name   string `json:"name"`
+	SHA256   string `json:"sha256"`
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Resource string `json:"resource,omitempty"` // AddFontResource string (Type 1: pfm|pfb)
 }
 
 func publishMachineFonts(st *State) {
@@ -103,7 +103,8 @@ func publishMachineFonts(st *State) {
 	list := []machineFont{}
 	for sha, f := range st.Fonts {
 		if !f.PendingRemoval {
-			list = append(list, machineFont{SHA256: sha, Path: f.Path, Name: f.FullName})
+			res, _ := winResource(f)
+			list = append(list, machineFont{SHA256: sha, Path: f.Path, Name: f.FullName, Resource: res})
 		}
 	}
 	writeJSONFile(filepath.Join(d, "fonts.json"), list, 0o644)
@@ -145,23 +146,23 @@ func LoadMachineFontsIntoSession() {
 	current := map[string]bool{}
 	changed := false
 	for _, f := range readMachineFonts() {
-		current[f.Path] = true
-		if sessionLoaded[f.Path] {
+		res := f.Resource
+		if res == "" {
+			res = f.Path
+		}
+		current[res] = true
+		if sessionLoaded[res] {
 			continue
 		}
-		if ptr, err := windows.UTF16PtrFromString(f.Path); err == nil {
-			if r, _, _ := procAddFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r != 0 {
-				sessionLoaded[f.Path] = true
-				changed = true
-			}
+		if addFontResource(res) {
+			sessionLoaded[res] = true
+			changed = true
 		}
 	}
-	for p := range sessionLoaded {
-		if !current[p] {
-			if ptr, err := windows.UTF16PtrFromString(p); err == nil {
-				procRemoveFontResourceW.Call(uintptr(unsafe.Pointer(ptr)))
-			}
-			delete(sessionLoaded, p)
+	for res := range sessionLoaded {
+		if !current[res] {
+			removeFontResource(res)
+			delete(sessionLoaded, res)
 			changed = true
 		}
 	}
@@ -184,54 +185,70 @@ func (p *machinePlatform) fontDir() (string, error) {
 
 func (p *machinePlatform) filePrefix() string { return "typehaus-" }
 
+const machineType1Key = `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Type 1 Installer\Type 1 Fonts`
+
 func (p *machinePlatform) install(f *Installed) error {
-	ptr, err := windows.UTF16PtrFromString(f.Path)
+	res, err := winResource(f)
 	if err != nil {
 		return err
 	}
-	if r, _, _ := procAddFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r == 0 {
-		return fmt.Errorf("AddFontResourceW rejected %s (unsupported or corrupt font)", filepath.Base(f.Path))
+	if !addFontResource(res) {
+		return fmt.Errorf("Windows rejected %s (unsupported or corrupt font)", filepath.Base(f.Path))
+	}
+	f.RegName = f.FullName + " [typehaus " + f.SHA256[:8] + "]"
+	if f.Kind == "type1" {
+		// Type 1 registration: "T", metrics file, outline file (names inside %WINDIR%\Fonts)
+		k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, machineType1Key, registry.SET_VALUE)
+		if err != nil {
+			return fmt.Errorf("open HKLM Type 1 key: %w", err)
+		}
+		defer k.Close()
+		return k.SetStringsValue(f.RegName, []string{"T", filepath.Base(extraWithExt(f, ".pfm")), filepath.Base(f.Path)})
 	}
 	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, machineFontsKey, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("open HKLM font key: %w", err)
 	}
 	defer k.Close()
-	f.RegName = f.FullName + " [typehaus " + f.SHA256[:8] + "]"
 	// files inside %WINDIR%\Fonts are registered by file name
 	return k.SetStringValue(f.RegName, filepath.Base(f.Path))
 }
 
 func (p *machinePlatform) uninstall(f *Installed) error {
-	if ptr, err := windows.UTF16PtrFromString(f.Path); err == nil {
-		for i := 0; i < 8; i++ {
-			if r, _, _ := procRemoveFontResourceW.Call(uintptr(unsafe.Pointer(ptr))); r == 0 {
-				break
-			}
-		}
+	if res, err := winResource(f); err == nil {
+		removeFontResource(res)
 	}
 	if f.RegName != "" {
-		if k, err := registry.OpenKey(registry.LOCAL_MACHINE, machineFontsKey, registry.SET_VALUE); err == nil {
+		key := machineFontsKey
+		if f.Kind == "type1" {
+			key = machineType1Key
+		}
+		if k, err := registry.OpenKey(registry.LOCAL_MACHINE, key, registry.SET_VALUE); err == nil {
 			if err := k.DeleteValue(f.RegName); err != nil && !errors.Is(err, registry.ErrNotExist) {
 				p.log.Warn("delete registry value", "name", f.RegName, "err", err)
 			}
 			k.Close()
 		}
 	}
-	if err := os.Remove(f.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		// In use by an application in some session: it is no longer
-		// registered, so delete it at the next restart.
-		from, perr := windows.UTF16PtrFromString(f.Path)
-		if perr != nil {
-			return err
+	for _, path := range append([]string{f.Path}, f.Extras...) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// In use by an application in some session: it is no longer
+			// registered, so delete it at the next restart.
+			from, perr := windows.UTF16PtrFromString(path)
+			if perr != nil {
+				return err
+			}
+			if merr := windows.MoveFileEx(from, nil, moveDelayUntilReb); merr != nil {
+				return err
+			}
+			p.log.Info("font in use – will be deleted at the next restart", "file", path)
 		}
-		if merr := windows.MoveFileEx(from, nil, moveDelayUntilReb); merr != nil {
-			return err
-		}
-		p.log.Info("font in use – will be deleted at the next restart", "file", f.Path)
 	}
 	return nil
 }
+
+// reload: machine-wide fonts are loaded by Windows at every logon.
+func (p *machinePlatform) reload(*Installed) bool { return false }
 
 func (p *machinePlatform) refresh() { (&winPlatform{}).refresh() }
 
