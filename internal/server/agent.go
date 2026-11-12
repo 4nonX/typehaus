@@ -201,8 +201,9 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	args := append([]any{userID}, vargs...)
 	// newest first, so the duplicate filter below keeps the newest upload
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name,
-		f.kind, f.platforms, f.extras
+		f.kind, f.platforms, f.extras, l.id, COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.seat_unit, ''), COALESCE(l.expires_on, '')
 		FROM fonts f JOIN activations a ON a.font_id = f.id AND a.user_id = ?
+		LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE `+where+` ORDER BY f.id DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -211,14 +212,37 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	out := []protocol.ManifestFont{}
 	seen := map[string]bool{}
 	psSeen := map[string]bool{}
+	var gate *deviceLicenseGate
+	if d != nil {
+		gate = &deviceLicenseGate{s: s, device: d.ID, nowT: time.Now(), holders: map[int64]map[int64]bool{}}
+	}
+	type row struct {
+		m                     protocol.ManifestFont
+		ps, platforms, extras string
+		lid                   sql.NullInt64
+		enforce               bool
+		seats                 int
+		unit, expires         string
+	}
+	var all []row
 	for rows.Next() {
-		var m protocol.ManifestFont
-		var ps, platforms, extras string
-		if err := rows.Scan(&m.ID, &m.SHA256, &m.Filename, &m.Family, &m.Style, &m.FullName, &m.Format, &m.Size, &ps,
-			&m.Kind, &platforms, &extras); err != nil {
+		var x row
+		if err := rows.Scan(&x.m.ID, &x.m.SHA256, &x.m.Filename, &x.m.Family, &x.m.Style, &x.m.FullName, &x.m.Format, &x.m.Size, &x.ps,
+			&x.m.Kind, &x.platforms, &x.extras, &x.lid, &x.enforce, &x.seats, &x.unit, &x.expires); err != nil {
 			return nil, err
 		}
+		all = append(all, x)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close() // the license gate queries the database: single connection
+	for _, x := range all {
+		m, ps, platforms, extras := x.m, x.ps, x.platforms, x.extras
 		if d != nil {
+			if !gate.allow(x.lid, x.enforce, x.seats, x.unit, x.expires) {
+				continue // license expired or no free device seat
+			}
 			if platforms != "" && d.Platform != "" && !strings.Contains(","+platforms+",", ","+d.Platform+",") {
 				continue // e.g. a Windows bitmap font for a Mac
 			}
@@ -244,9 +268,6 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 		}
 		seen[m.SHA256] = true
 		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SHA256 < out[j].SHA256 }) // stable ETag
 	return out, nil

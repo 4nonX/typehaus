@@ -17,7 +17,7 @@ typehaus does the core of it, free:
 - **Activate from the browser.** Toggle a family or a single style. Every computer you enrolled installs it within a minute and removes it when you turn it off.
 - **No admin rights.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux.
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
-- **License tracking.** Record purchased licenses and seat counts, assign them to fonts, and see actual usage per license and per family: users with the font active, devices with it installed.
+- **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
 - **Activity log.** Uploads, activations, enrollments, sign-ins and admin changes.
 - **Single sign-on.** Optional OIDC (Authentik, Keycloak, Authelia, Zitadel, Entra ID, Google…) with group sync and admin mapping. Local accounts work out of the box.
 - **Small and boring to run.** A single Go binary with an embedded web UI. SQLite plus a content-addressed file store in one `/data` volume. Distroless image, no external services.

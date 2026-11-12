@@ -68,7 +68,7 @@ h2 { font: 500 22px/1.2 var(--serif); margin: 28px 0 12px; }
 .btn.ghost:hover { background: var(--paper-2); }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.sm { padding: 4px 10px; font-size: 13px; }
-input[type=text], input[type=password], input[type=search], input[type=number], input[type=email], select, textarea {
+input[type=text], input[type=password], input[type=search], input[type=number], input[type=email], input[type=url], input[type=date], select, textarea {
   border: 1px solid var(--rule); background: var(--card); padding: 8px 11px; border-radius: 8px; min-width: 0;
 }
 input:focus, select:focus, textarea:focus, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -141,6 +141,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--paper-2); color: var(--ink-2); border: 1px solid var(--rule); }
 .badge.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .badge.warn { color: var(--warn); border-color: var(--warn); background: transparent; }
+.badge.danger { color: #fff; border-color: var(--danger); background: var(--danger); }
+.badge.open { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: transparent; }
 .empty { padding: 60px 20px; text-align: center; color: var(--ink-3); }
 .empty .big { font: italic 42px var(--serif); color: var(--ink-2); margin-bottom: 8px; }
 
@@ -173,6 +175,38 @@ table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabula
 .meter { height: 6px; background: var(--paper-2); border-radius: 999px; overflow: hidden; width: 120px; display: inline-block; vertical-align: middle; }
 .meter i { display: block; height: 100%; background: var(--ok); }
 .meter.over i { background: var(--danger); }
+.meter.full i { background: var(--warn); }
+
+/* ---- licenses ---- */
+dialog.wide { width: min(680px, 96vw); }
+dialog h4 { margin: 8px 0 0; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+dl.kv2 { display: grid; grid-template-columns: 120px 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+dl.kv2 dt { color: var(--ink-3); font-size: 13px; }
+dl.kv2 dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+dl.kv2 dd.pre { white-space: pre-wrap; }
+.lcard { border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px; background: var(--paper); display: grid; gap: 8px; }
+.lcard .lhead { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.lcard .lhead b { font: 500 18px var(--serif); margin-right: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--rule); background: var(--card); color: var(--ink-2); }
+.chips.pick .chip { cursor: pointer; display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; font-size: 13px; }
+.chips.pick .chip:has(input:checked) { border-color: var(--ink); color: var(--ink); }
+fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+fieldset.field legend { font-size: 13px; color: var(--ink-2); padding: 0; margin-bottom: 6px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .two { grid-template-columns: 1fr; } }
+label.check { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+label.check input { margin-top: 3px; }
+.docs { display: grid; gap: 2px; }
+.doc { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px dashed var(--rule); flex-wrap: wrap; }
+.doc .spacer { flex: 1; }
+.docup { display: flex; gap: 12px; align-items: center; }
+details.embedded summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+pre.lic { white-space: pre-wrap; font: 12px/1.5 var(--mono); max-height: 240px; overflow: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+.alert.warnbox { border-color: var(--warn); color: var(--ink); background: color-mix(in srgb, var(--warn) 10%, transparent); display: grid; gap: 2px; margin-bottom: 14px; }
+table.lics a.lname { color: var(--ink); font-weight: 600; text-decoration: none; border-bottom: 1px solid var(--rule); }
+table.lics a.lname:hover { border-color: var(--ink); }
+.btn[href] { text-decoration: none; display: inline-flex; align-items: center; }
 
 /* ---- modal ---- */
 dialog { border: 1px solid var(--rule); border-radius: 14px; padding: 0; background: var(--card); color: var(--ink); width: min(520px, 94vw); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
@@ -200,3 +234,4 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 details.cli { margin-top: 14px; }
 details.cli summary { cursor: pointer; color: var(--ink-2); margin-bottom: 10px; }
 .more { padding: 30px; text-align: center; color: var(--ink-3); font-size: 13px; }
+.nowrap { white-space: nowrap; }

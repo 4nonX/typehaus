@@ -492,6 +492,13 @@ func (s *Server) storeFont(uploadName string, df fontmeta.File, extras map[strin
 	}
 	res.Status = "added"
 	var notes []string
+	if n, _, err := s.autoLicense(ids); err != nil {
+		s.log.Warn("license detection", "err", err)
+	} else if n > 0 {
+		var name string
+		s.db.QueryRow(`SELECT l.name FROM fonts f JOIN licenses l ON l.id = f.license_id WHERE f.id = ?`, ids[0]).Scan(&name)
+		notes = append(notes, "license: "+name)
+	}
 	if df.Source != "" && df.Kind == fontmeta.KindSFNT {
 		notes = append(notes, "converted from "+strings.ToUpper(df.Source)+" to "+strings.ToUpper(df.Format))
 	}
@@ -624,13 +631,7 @@ func (s *Server) handleDeleteFonts(w http.ResponseWriter, r *http.Request, u *au
 	// remove blobs no longer referenced (e.g. all faces of a TTC deleted, or
 	// the metrics files of a Type 1 font)
 	for _, sha := range append(shas, extraShas...) {
-		var n int
-		s.db.QueryRow(`SELECT COUNT(*) FROM fonts WHERE sha256 = ? OR instr(extras, ?) > 0`, sha, sha).Scan(&n)
-		if n == 0 {
-			if err := os.Remove(s.blobPath(sha)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				s.log.Warn("remove blob", "sha", sha, "err", err)
-			}
-		}
+		s.removeBlobIfUnused(sha)
 	}
 	s.audit(u, "font.delete", "%s", strings.Join(names, ", "))
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -649,21 +650,35 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request, u *authU
 		writeErr(w, 400, "font_ids required")
 		return
 	}
+	blocked, refused := s.activationRefusals(u.ID, req.FontIDs)
+	var ids []int64
+	for _, id := range req.FontIDs {
+		if !blocked[id] {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		writeErr(w, 409, "Can't activate: "+strings.Join(refused, "; ")+". Ask an administrator.")
+		return
+	}
 	where, vargs := visibleClause(u)
-	args := append([]any{u.ID, now()}, int64Args(req.FontIDs)...) // user_id, created_at, ids…
+	args := append([]any{u.ID, now()}, int64Args(ids)...) // user_id, created_at, ids…
 	args = append(args, vargs...)
 	res, err := s.db.Exec(`INSERT OR IGNORE INTO activations (user_id, font_id, created_at)
-		SELECT ?, f.id, ? FROM fonts f WHERE f.id IN (`+placeholders(len(req.FontIDs))+`) AND `+where, args...)
+		SELECT ?, f.id, ? FROM fonts f WHERE f.id IN (`+placeholders(len(ids))+`) AND `+where, args...)
 	if err != nil {
 		s.internalErr(w, err)
 		return
 	}
 	n, _ := res.RowsAffected()
-	replaced := s.resolveConflicts(u.ID, req.FontIDs)
+	replaced := s.resolveConflicts(u.ID, ids)
 	if n > 0 {
 		s.audit(u, "font.activate", "%d font(s)", n)
 	}
-	writeJSON(w, 200, map[string]int64{"activated": n, "replaced": replaced})
+	if refused == nil {
+		refused = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"activated": n, "replaced": replaced, "refused": refused})
 }
 
 func (s *Server) handleDeactivate(w http.ResponseWriter, r *http.Request, u *authUser) {

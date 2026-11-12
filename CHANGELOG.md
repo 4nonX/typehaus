@@ -15,6 +15,13 @@ The section matching a release tag becomes that release's notes on GitHub.
   - X11 bitmap fonts (`.pcf`, `.bdf`, also gzip-compressed)
   
   Each computer only receives formats its system can install. The library shows format and platform badges.
+- **License management.**
+  - Licenses record their type (commercial or open source), allowed use (desktop, web, apps, e-books & PDFs, video, logos), seats counted per user or per device, purchase and expiry dates, order reference, terms URL and notes.
+  - Attach license documents (EULA, invoice, certificate) to a license. Each document is either visible to everyone who can see the fonts, or to admins only. PDFs, text and images open in the browser; anything else is downloaded.
+  - Open-source licenses (SIL OFL, Apache, Ubuntu Font Licence, GPL with font exception, AGPL, LPPL, GUST, Bitstream Vera, MIT, CC0) are recognised from the fonts' embedded license information and assigned automatically on upload, or for the whole library with *Detect open-source licenses*.
+  - Optional enforcement per license: activations beyond the purchased seats are refused, per-device licenses are installed on at most that many computers, and after expiry the fonts are removed from all computers. Without enforcement typehaus only warns.
+  - The Licenses page shows seat usage, terms, expiring (30 days) and over-used licenses, and who holds a seat; the menu marks licenses that need attention. *Export CSV* creates a compliance report.
+  - Everyone sees a family's license, allowed use, terms and shared documents under *Info* in the library, together with the embedding permission and the license text stored in the font itself.
 - Drag and drop whole font folders; large uploads are sent in batches.
 - CI imports the complete system font folders of Windows, macOS and Linux on every change, and installs real `.fon`, Type 1, PCF and WOFF2 fonts end to end on all three systems.
 

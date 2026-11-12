@@ -249,10 +249,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/groups", s.admin(s.handleCreateGroup))
 	mux.Handle("PATCH /api/groups/{id}", s.admin(s.handleUpdateGroup))
 	mux.Handle("DELETE /api/groups/{id}", s.admin(s.handleDeleteGroup))
-	mux.Handle("GET /api/licenses", s.admin(s.handleListLicenses))
+	mux.Handle("GET /api/licenses", s.user(s.handleListLicenses)) // non-admins: licenses of fonts they can see
+	mux.Handle("GET /api/licenses/{id}", s.user(s.handleGetLicense))
+	mux.Handle("GET /api/licenses/export.csv", s.admin(s.handleLicenseReport))
 	mux.Handle("POST /api/licenses", s.admin(s.handleCreateLicense))
+	mux.Handle("POST /api/licenses/detect", s.admin(s.handleDetectLicenses))
 	mux.Handle("PATCH /api/licenses/{id}", s.admin(s.handleUpdateLicense))
 	mux.Handle("DELETE /api/licenses/{id}", s.admin(s.handleDeleteLicense))
+	mux.Handle("POST /api/licenses/{id}/documents", s.admin(s.handleUploadLicenseDocs))
+	mux.Handle("GET /api/licenses/{id}/documents/{doc}", s.user(s.handleLicenseDoc))
+	mux.Handle("PATCH /api/licenses/{id}/documents/{doc}", s.admin(s.handleUpdateLicenseDoc))
+	mux.Handle("DELETE /api/licenses/{id}/documents/{doc}", s.admin(s.handleDeleteLicenseDoc))
 	mux.Handle("GET /api/reports/usage", s.admin(s.handleUsageReport))
 	mux.Handle("GET /api/audit", s.admin(s.handleAudit))
 

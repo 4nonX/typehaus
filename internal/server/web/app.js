@@ -108,6 +108,7 @@ function render() {
   $('#logout').onclick = async () => { await api('POST', '/api/auth/logout').catch(() => {}); S.me = null; S.lib.loaded = false; render(); };
   $('#acct').onclick = accountDialog;
   document.title = `${def.title} · typehaus`;
+  updateNavDot();
   def.render($('#page')).catch?.(fail);
 }
 
@@ -155,15 +156,17 @@ function renderLogin(app) {
 // ---------------------------------------------------------------------------
 // dialogs
 // ---------------------------------------------------------------------------
-function dialog(title, body, { submit = 'Save', danger = false, onSubmit } = {}) {
+function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel = true, wide = false } = {}) {
   const d = document.createElement('dialog');
+  if (wide) d.classList.add('wide');
   d.innerHTML = `<form method="dialog"><h3>${esc(title)}</h3>${body}
     <div class="err"></div>
-    <div class="actions"><button type="button" class="btn ghost" value="cancel">Cancel</button>
+    <div class="actions">${cancel ? '<button type="button" class="btn ghost" value="cancel">Cancel</button>' : ''}
     <button type="submit" class="btn ${danger ? 'accent' : 'primary'}">${esc(submit)}</button></div></form>`;
   document.body.append(d);
   const form = $('form', d);
-  $('[value=cancel]', d).onclick = () => d.close();
+  const c = $('[value=cancel]', d);
+  if (c) c.onclick = () => d.close();
   d.addEventListener('close', () => d.remove());
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -227,10 +230,9 @@ const previewObserver = new IntersectionObserver((entries) => {
 // ---------------------------------------------------------------------------
 async function loadLibrary() {
   const L = S.lib;
-  const reqs = [api('GET', '/api/fonts'), api('GET', '/api/collections')];
-  if (S.me.is_admin) reqs.push(api('GET', '/api/licenses'));
-  const [fonts, colls, lics] = await Promise.all(reqs);
+  const [fonts, colls, lics] = await Promise.all([api('GET', '/api/fonts'), api('GET', '/api/collections'), api('GET', '/api/licenses')]);
   L.fonts = fonts; L.collections = colls; L.licenses = lics || []; L.loaded = true;
+  updateNavDot();
   const ids = new Set(fonts.map((f) => f.id));
   for (const id of [...L.selected]) if (!ids.has(id)) L.selected.delete(id);
 }
@@ -335,7 +337,7 @@ function drawFamilies() {
   box.innerHTML = visibleFams.map((fam) => {
     const open = L.expanded.has(fam.name);
     const allSel = fam.faces.every((f) => L.selected.has(f.id));
-    const lic = admin && fam.rep.license_id ? L.licenses.find((l) => l.id === fam.rep.license_id) : null;
+    const lic = fam.rep.license_id ? L.licenses.find((l) => l.id === fam.rep.license_id) : null;
     const restricted = fam.faces.some((f) => f.fs_type & 0x2 && !(f.fs_type & 0xc));
     const conflict = fam.faces.some((f) => f.conflict);
     const kinds = [...new Set(fam.faces.map((f) => f.kind))].filter((k) => k && k !== 'sfnt');
@@ -345,9 +347,10 @@ function drawFamilies() {
         ${admin ? `<input type="checkbox" class="selfam" ${allSel ? 'checked' : ''} title="Select family">` : ''}
         <label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>
         <span class="name">${esc(fam.name)}</span>
-        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · <span class="badge">${esc(lic.name)}</span>` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
+        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · ${licenseBadge(lic)}` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
+        <button class="expand info" title="Details and license">Info</button>
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
       </div>
       <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(fam.name)}" style="font-size:${L.size}px">${esc(L.preview || fam.name)}</div>
@@ -375,7 +378,8 @@ function drawFamilies() {
     cb.onchange = () => setActive(fam.faces.map((f) => f.id), fam.active < fam.faces.length);
   });
   $$('.actface', box).forEach((cb) => cb.onchange = () => setActive([+cb.closest('.style-row').dataset.id], cb.checked));
-  $$('.expand', box).forEach((b) => b.onclick = () => {
+  $$('.info', box).forEach((b) => b.onclick = () => familyInfo(fams.find((x) => x.name === b.closest('.family').dataset.fam)));
+  $$('.expand:not(.info)', box).forEach((b) => b.onclick = () => {
     const n = b.closest('.family').dataset.fam;
     L.expanded.has(n) ? L.expanded.delete(n) : L.expanded.add(n);
     drawFamilies();
@@ -399,6 +403,7 @@ async function setActive(ids, on) {
     const r = await api(on ? 'POST' : 'DELETE', '/api/activations', { font_ids: ids });
     toast(on ? `Activated ${plural(ids.length, 'style')} – your devices sync shortly` : `Deactivated ${plural(ids.length, 'style')}`);
     if (on && r.replaced) toast(`${plural(r.replaced, 'style')} with the same name switched off – only one version can be active`);
+    if (on && r.refused?.length) toast(`Some styles were not activated: ${r.refused.join('; ')}`, true);
     S.lib.loaded = false; // reload: conflicts may have switched other fonts off
   } catch (e) { fail(e); }
   const page = $('#page');
@@ -732,46 +737,282 @@ async function renderPeople(page) {
   });
 }
 
+// shared license helpers (library, info panel, licenses page)
+const RIGHTS = {
+  desktop: 'Desktop – print & documents', web: 'Web – @font-face', app: 'Apps & software',
+  ebook: 'E-books & PDFs', video: 'Video & broadcast', logo: 'Logos & trademarks',
+};
+
+function licenseAttention() {
+  if (!S.me?.is_admin) return [];
+  return S.lib.licenses.filter((l) => l.expired || l.over || (l.expires_in_days != null && l.expires_in_days <= 30));
+}
+
+// the warning dot on the Licenses tab
+function updateNavDot() {
+  const a = $('nav.main a[href="#/licenses"]');
+  if (!a) return;
+  const want = licenseAttention().length > 0;
+  const dot = $('.dot', a);
+  if (want && !dot) a.insertAdjacentHTML('beforeend', ' <span class="dot warn" title="Licenses need attention"></span>');
+  if (!want && dot) dot.remove();
+}
+
+function termText(l) {
+  if (!l.expires_on) return 'Perpetual';
+  if (l.expired) return `Expired on ${esc(l.expires_on)}`;
+  return `Valid until ${esc(l.expires_on)} <span class="muted">(${plural(l.expires_in_days, 'day')} left)</span>`;
+}
+
+function seatText(l) {
+  const unit = l.seat_unit === 'devices' ? 'device' : 'user';
+  if (!l.seats) return `Unlimited${l.used ? ` · ${plural(l.used, unit)} using it` : ''}`;
+  return `${l.used} of ${plural(l.seats, unit + ' seat')} in use`;
+}
+
+// badge shown next to a family in the library
+function licenseBadge(l) {
+  const tip = esc(`${l.name}${l.vendor ? ' · ' + l.vendor : ''}`);
+  if (l.expired) return `<span class="badge warn" title="${tip}">license expired${l.enforce ? ' – not installed' : ''}</span>`;
+  if (l.enforce && l.full && !l.holder) return `<span class="badge warn" title="${tip}: all seats are in use">no free seat</span>`;
+  if (S.me.is_admin && l.over) return `<span class="badge warn" title="${tip}: more ${l.seat_unit} than seats">${esc(l.name)} · over seats</span>`;
+  return `<span class="badge ${l.kind === 'open' ? 'open' : ''}" title="${tip}">${esc(l.name)}</span>`;
+}
+
+function statusBadges(l) {
+  const b = [];
+  if (l.expired) b.push('<span class="badge danger">expired</span>');
+  else if (l.expires_in_days != null && l.expires_in_days <= 30) b.push(`<span class="badge warn">expires in ${plural(l.expires_in_days, 'day')}</span>`);
+  if (l.over) b.push('<span class="badge danger">over seats</span>');
+  else if (l.full) b.push('<span class="badge warn">all seats in use</span>');
+  if (l.enforce) b.push('<span class="badge" title="Seats and term are enforced: no activations beyond the seats, nothing installed after expiry">enforced</span>');
+  return b.join(' ');
+}
+
+const rightsSummary = (l) => l.rights.length === Object.keys(RIGHTS).length ? 'All uses'
+  : l.rights.map((r) => (RIGHTS[r] || r).split(' – ')[0]).join(', ');
+
+const docURL = (l, d, dl) => `/api/licenses/${l.id}/documents/${d.id}${dl ? '?download=1' : ''}`;
+
+// read-only summary of a license, used in the info panel and license details
+function licenseCard(l) {
+  return `<div class="lcard">
+    <div class="lhead"><b>${esc(l.name)}</b> <span class="badge ${l.kind === 'open' ? 'open' : ''}">${l.kind === 'open' ? 'Open source' : 'Commercial'}</span> ${statusBadges(l)}</div>
+    ${l.vendor ? `<div class="small muted">${esc(l.vendor)}</div>` : ''}
+    <dl class="kv2">
+      <dt>Allowed use</dt><dd>${l.rights.length ? `<div class="chips">${l.rights.map((r) => `<span class="chip">${esc(RIGHTS[r] || r)}</span>`).join('')}</div>` : '<span class="muted">Not recorded – check the license terms</span>'}</dd>
+      <dt>Seats</dt><dd>${seatText(l)}${l.holder ? ' <span class="muted small">· you hold one</span>' : ''}</dd>
+      <dt>Term</dt><dd>${termText(l)}${l.purchased_on ? ` <span class="muted small">· purchased ${esc(l.purchased_on)}</span>` : ''}</dd>
+      ${l.reference ? `<dt>Reference</dt><dd>${esc(l.reference)}</dd>` : ''}
+      ${l.url ? `<dt>Terms</dt><dd><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, ''))} ↗</a></dd>` : ''}
+      ${l.documents.length ? `<dt>Documents</dt><dd>${l.documents.map((d) => `<a href="${docURL(l, d)}" target="_blank" rel="noopener">${esc(d.filename)}</a>`).join('<br>')}</dd>` : ''}
+      ${l.notes ? `<dt>Notes</dt><dd class="pre">${esc(l.notes)}</dd>` : ''}
+    </dl></div>`;
+}
+
+function embeddingText(fs) {
+  let t;
+  if (fs & 0x2 && !(fs & 0xc)) t = 'Restricted – must not be embedded in documents or PDFs';
+  else if (fs & 0x4) t = 'Preview & print – may be embedded read-only';
+  else if (fs & 0x8) t = 'Editable – may be embedded for editing';
+  else t = 'Installable – no embedding restrictions';
+  if (fs & 0x100) t += ' · no subsetting';
+  if (fs & 0x200) t += ' · bitmap embedding only';
+  return t;
+}
+
+// ---------------------------------------------------------------------------
+// family info panel
+// ---------------------------------------------------------------------------
+async function familyInfo(fam) {
+  const L = S.lib;
+  const r = fam.rep;
+  let detail = {};
+  try { detail = await api('GET', `/api/fonts/${r.id}`); } catch (e) { fail(e); return; }
+  const lic = r.license_id ? L.licenses.find((l) => l.id === r.license_id) : null;
+  const mixed = new Set(fam.faces.map((f) => f.license_id ?? 0)).size > 1;
+  const formats = [...new Set(fam.faces.map((f) => f.format.toUpperCase() + (f.source_format ? ` (from ${f.source_format.toUpperCase()})` : '')))];
+  const fsTypes = [...new Set(fam.faces.map((f) => embeddingText(f.fs_type)))];
+  const admin = S.me.is_admin;
+  const d = dialog(fam.name, `
+    <dl class="kv2">
+      ${r.designer ? `<dt>Designer</dt><dd>${esc(r.designer)}</dd>` : ''}
+      ${r.manufacturer ? `<dt>Foundry</dt><dd>${esc(r.manufacturer)}</dd>` : ''}
+      ${r.version ? `<dt>Version</dt><dd>${esc(r.version)}</dd>` : ''}
+      <dt>Styles</dt><dd>${fam.faces.map((f) => esc(f.style)).join(', ')}</dd>
+      <dt>Format</dt><dd>${formats.map(esc).join(', ')}</dd>
+    </dl>
+    <h4>License</h4>
+    ${mixed ? '<p class="small muted">The styles of this family have different licenses; showing the license of the regular style.</p>' : ''}
+    ${lic ? licenseCard(lic) : `<p class="muted">${admin ? 'No license recorded for this family.' : 'No license information recorded. Ask an administrator before using this font commercially.'}</p>`}
+    ${admin ? `<label class="field">Assign license to all ${plural(fam.faces.length, 'style')}
+      <select id="fi-lic"><option value="">— keep —</option><option value="0">No license</option>${L.licenses.map((l) => `<option value="${l.id}" ${lic && l.id === lic.id && !mixed ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>` : ''}
+    <h4>Embedding permission <span class="muted small">(from the font file)</span></h4>
+    <p class="small">${fsTypes.map(esc).join('<br>')}</p>
+    ${detail.copyright || detail.license_text || detail.license_url ? `<details class="embedded"><summary>Copyright and license text in the font</summary>
+      ${detail.copyright ? `<p class="small">${esc(detail.copyright)}</p>` : ''}
+      ${detail.license_text ? `<pre class="lic">${esc(detail.license_text)}</pre>` : ''}
+      ${detail.license_url ? `<p class="small">${/^https?:\/\//i.test(detail.license_url) ? `<a href="${esc(detail.license_url)}" target="_blank" rel="noopener noreferrer">${esc(detail.license_url)} ↗</a>` : esc(detail.license_url)}</p>` : ''}
+    </details>` : ''}`,
+  {
+    submit: admin ? 'Save' : 'Close', cancel: admin, wide: true,
+    onSubmit: async () => {
+      const v = admin ? $('#fi-lic', d).value : '';
+      if (v === '') return;
+      await api('PATCH', '/api/fonts', { font_ids: fam.faces.map((f) => f.id), license_id: +v });
+      toast('License assigned');
+      L.loaded = false;
+      if (route() === 'library') await renderLibrary($('#page'));
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // licenses (admin)
 // ---------------------------------------------------------------------------
 async function renderLicenses(page) {
   const [lics, usage] = await Promise.all([api('GET', '/api/licenses'), api('GET', '/api/reports/usage')]);
-  const meter = (used, seats) => seats ? `<span class="meter ${used > seats ? 'over' : ''}"><i style="width:${Math.min(100, used / seats * 100)}%"></i></span> ${used} / ${seats}` : `${used} / ∞`;
+  S.lib.licenses = lics;
+  updateNavDot();
+  const meter = (l) => l.seats
+    ? `<span class="meter ${l.over ? 'over' : l.full ? 'full' : ''}"><i style="width:${Math.min(100, l.used / l.seats * 100)}%"></i></span> ${l.used} / ${l.seats}`
+    : `${l.used} / ∞`;
+  const unassigned = usage.filter((u) => !u.license);
+  const attention = licenseAttention();
   page.innerHTML = `
-    <div class="row"><div><h1>Licenses</h1><p class="sub">Record what you bought and see how many people actually use it. Seats are counted per user with at least one active style.</p></div>
-      <span class="spacer"></span><button class="btn primary" id="new">New license</button></div>
-    ${lics.length ? `<table class="t"><thead><tr><th>License</th><th>Vendor</th><th>Seats used</th><th class="num">Styles</th><th class="num">Devices</th><th></th></tr></thead><tbody>
-      ${lics.map((l) => `<tr><td><b>${esc(l.name)}</b>${l.notes ? `<div class="small muted">${esc(l.notes)}</div>` : ''}</td><td>${esc(l.vendor)}</td>
-        <td>${meter(l.users, l.seats)}${l.seats && l.users > l.seats ? ' <span class="badge warn">over</span>' : ''}</td>
-        <td class="num">${l.fonts}</td><td class="num">${l.devices}</td>
-        <td style="text-align:right"><button class="btn sm" data-edit="${l.id}">Edit</button> <button class="btn sm danger" data-del="${l.id}">Delete</button></td></tr>`).join('')}
-    </tbody></table>` : '<p class="muted">No licenses recorded. Create one, then assign it to fonts in the Library (select fonts → Assign license).</p>'}
+    <div class="row"><div><h1>Licenses</h1><p class="sub">What you bought, what it allows, who uses it – and the documents that prove it.</p></div>
+      <span class="spacer"></span>
+      <button class="btn" id="detect" title="Assign open-source licenses (OFL, Apache, …) to fonts whose embedded license information names one">Detect open-source licenses</button>
+      <a class="btn" href="/api/licenses/export.csv" download>Export CSV</a>
+      <button class="btn primary" id="new">New license</button></div>
+    ${attention.length ? `<div class="alert warnbox">${attention.map((l) => `<div><b>${esc(l.name)}</b>: ${[
+      l.expired && `expired on ${esc(l.expires_on)}`,
+      !l.expired && l.expires_in_days != null && l.expires_in_days <= 30 && `expires in ${plural(l.expires_in_days, 'day')} (${esc(l.expires_on)})`,
+      l.over && `${l.used} ${l.seat_unit} for ${plural(l.seats, 'seat')}`].filter(Boolean).join(', ')}</div>`).join('')}</div>` : ''}
+    ${lics.length ? `<table class="t lics"><thead><tr><th>License</th><th>Seats</th><th>Term</th><th class="num">Docs</th><th class="num">Families</th><th></th></tr></thead><tbody>
+      ${lics.map((l) => `<tr>
+        <td><a href="#" class="lname" data-open="${l.id}">${esc(l.name)}</a> ${l.kind === 'open' ? '<span class="badge open">open source</span>' : ''} ${statusBadges(l)}
+          <div class="small muted">${[l.vendor, rightsSummary(l)].filter(Boolean).map(esc).join(' · ')}</div></td>
+        <td class="nowrap">${meter(l)} <span class="small muted">${l.seat_unit}</span></td>
+        <td class="small">${termText(l)}</td>
+        <td class="num">${l.documents.length || '<span class="muted">–</span>'}</td>
+        <td class="num">${l.families}</td>
+        <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-edit="${l.id}">Edit</button> <button class="btn sm danger" data-del="${l.id}">Delete</button></td></tr>`).join('')}
+    </tbody></table>` : '<p class="muted">No licenses recorded yet. Create one, then assign it to fonts in the Library (select fonts → Assign license, or Info on a family). Open-source fonts can be detected automatically.</p>'}
+    ${unassigned.length ? `<p class="small muted">${plural(unassigned.length, 'family', 'families')} without a license: ${unassigned.slice(0, 12).map((u) => esc(u.family)).join(', ')}${unassigned.length > 12 ? '…' : ''}</p>` : ''}
     <h2>Usage by family</h2>
     <table class="t"><thead><tr><th>Family</th><th>License</th><th class="num">Styles</th><th>Active users</th><th class="num">Devices</th></tr></thead><tbody>
     ${usage.map((u) => `<tr><td><b>${esc(u.family)}</b></td><td>${u.license ? esc(u.license) : '<span class="muted small">unassigned</span>'}</td>
       <td class="num">${u.faces}</td><td title="${esc(u.user_names)}">${u.users}${u.user_names ? ` <span class="small muted">${esc(u.user_names.split(',').slice(0, 4).join(', '))}${u.user_names.split(',').length > 4 ? '…' : ''}</span>` : ''}</td>
       <td class="num">${u.devices}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Library is empty.</td></tr>'}
     </tbody></table>`;
-  const edit = (l) => dialog(l ? 'Edit license' : 'New license', `
-    <label class="field">Name<input type="text" name="name" required value="${esc(l?.name)}" placeholder="e.g. Brand family – desktop, 10 seats"></label>
-    <label class="field">Vendor / foundry<input type="text" name="vendor" value="${esc(l?.vendor)}"></label>
-    <label class="field">Seats (0 = unlimited)<input type="number" name="seats" min="0" value="${l?.seats ?? 0}"></label>
-    <label class="field">Notes<textarea name="notes" rows="3" placeholder="Invoice number, renewal date, restrictions…">${esc(l?.notes)}</textarea></label>`,
-  {
-    onSubmit: async (fd) => {
-      const body = { name: fd.get('name'), vendor: fd.get('vendor'), seats: +fd.get('seats') || 0, notes: fd.get('notes') };
-      if (l) await api('PATCH', `/api/licenses/${l.id}`, body); else await api('POST', '/api/licenses', body);
-      S.lib.loaded = false;
-      renderLicenses(page);
-    },
-  });
-  $('#new', page).onclick = () => edit(null);
-  $$('[data-edit]', page).forEach((b) => b.onclick = () => edit(lics.find((l) => l.id === +b.dataset.edit)));
+  const refresh = () => { S.lib.loaded = false; return renderLicenses(page).catch(fail); };
+  $('#new', page).onclick = () => editLicense(null, refresh);
+  $('#detect', page).onclick = async () => {
+    try {
+      const r = await api('POST', '/api/licenses/detect');
+      toast(r.assigned ? `${plural(r.assigned, 'style')} assigned${r.created.length ? ' · created ' + r.created.join(', ') : ''}` : 'No unassigned fonts with a recognisable open-source license');
+      refresh();
+    } catch (e) { fail(e); }
+  };
+  $$('[data-open]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); licenseDetail(+a.dataset.open, refresh); });
+  $$('[data-edit]', page).forEach((b) => b.onclick = () => editLicense(lics.find((l) => l.id === +b.dataset.edit), refresh));
   $$('[data-del]', page).forEach((b) => b.onclick = () => {
     const l = lics.find((x) => x.id === +b.dataset.del);
-    confirmDialog('Delete license', `Delete <b>${esc(l.name)}</b>? Fonts stay in the library and become unassigned.`,
-      async () => { await api('DELETE', `/api/licenses/${l.id}`); S.lib.loaded = false; renderLicenses(page); });
+    confirmDialog('Delete license', `Delete <b>${esc(l.name)}</b> and its ${plural(l.documents.length, 'document')}? Fonts stay in the library and become unassigned.`,
+      async () => { await api('DELETE', `/api/licenses/${l.id}`); refresh(); });
+  });
+}
+
+function editLicense(l, done) {
+  const rights = l ? l.rights : ['desktop'];
+  const d = dialog(l ? 'Edit license' : 'New license', `
+    <label class="field">Name<input type="text" name="name" required maxlength="200" value="${esc(l?.name)}" placeholder="e.g. Brand Sans – desktop, 10 users"></label>
+    <div class="two">
+      <label class="field">Type<select name="kind"><option value="commercial">Commercial</option><option value="open" ${l?.kind === 'open' ? 'selected' : ''}>Open source</option></select></label>
+      <label class="field">Vendor / foundry<input type="text" name="vendor" maxlength="200" value="${esc(l?.vendor)}"></label>
+    </div>
+    <fieldset class="field"><legend>Allowed use</legend><div class="chips pick">
+      ${Object.entries(RIGHTS).map(([k, v]) => `<label class="chip"><input type="checkbox" name="rights" value="${k}" ${rights.includes(k) ? 'checked' : ''}> ${esc(v)}</label>`).join('')}
+    </div></fieldset>
+    <div class="two">
+      <label class="field">Seats (0 = unlimited)<input type="number" name="seats" min="0" value="${l?.seats ?? 0}"></label>
+      <label class="field">Counted per<select name="seat_unit"><option value="users">User (anyone with a style active)</option><option value="devices" ${l?.seat_unit === 'devices' ? 'selected' : ''}>Device (computers with it installed)</option></select></label>
+    </div>
+    <div class="two">
+      <label class="field">Purchased<input type="date" name="purchased_on" value="${esc(l?.purchased_on)}"></label>
+      <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="enforce" ${l?.enforce ? 'checked' : ''}>
+      <span><b>Enforce</b> – refuse activations when all seats are taken and remove the fonts from computers when the license has expired. Off: typehaus only warns.</span></label>
+    <div class="two">
+      <label class="field">Order / invoice reference<input type="text" name="reference" maxlength="200" value="${esc(l?.reference)}"></label>
+      <label class="field">License terms URL<input type="url" name="url" placeholder="https://" value="${esc(l?.url)}"></label>
+    </div>
+    <label class="field">Notes<textarea name="notes" rows="3" placeholder="Restrictions, contact at the foundry, renewal terms…">${esc(l?.notes)}</textarea></label>
+    ${l ? '' : '<p class="small muted">Attach the EULA, invoice or certificate after saving – open the license from the list.</p>'}`,
+  {
+    wide: true,
+    onSubmit: async (fd) => {
+      const body = {
+        name: fd.get('name'), kind: fd.get('kind'), vendor: fd.get('vendor'), rights: fd.getAll('rights'),
+        seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on',
+        purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
+        reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),
+      };
+      if (l) await api('PATCH', `/api/licenses/${l.id}`, body);
+      else {
+        const r = await api('POST', '/api/licenses', body);
+        setTimeout(() => licenseDetail(r.id, done), 0);
+      }
+      toast('License saved');
+      done();
+    },
+  });
+  return d;
+}
+
+async function licenseDetail(id, done) {
+  let r;
+  try { r = await api('GET', `/api/licenses/${id}`); } catch (e) { fail(e); return; }
+  const l = r.license;
+  const d = dialog(l.name, `
+    ${licenseCard({ ...l, documents: [] })}
+    <h4>Documents</h4>
+    <p class="small muted">EULA, invoice, license certificate… Documents marked <i>visible to users</i> can be opened by everyone who can see these fonts; the others only by admins.</p>
+    <div class="docs">${l.documents.map((doc) => `<div class="doc" data-doc="${doc.id}">
+      <a href="${docURL(l, doc)}" target="_blank" rel="noopener">${esc(doc.filename)}</a>
+      <span class="small muted">${fmtSize(doc.size)} · ${ago(doc.created_at)}</span>
+      <span class="spacer"></span>
+      <label class="small"><input type="checkbox" class="doc-shared" ${doc.shared ? 'checked' : ''}> visible to users</label>
+      <a class="small" href="${docURL(l, doc, true)}">Download</a>
+      <button type="button" class="btn sm danger doc-del">Remove</button></div>`).join('') || '<p class="muted small">No documents attached yet.</p>'}</div>
+    <div class="docup"><button type="button" class="btn sm" id="doc-add">Attach files…</button>
+      <label class="small"><input type="checkbox" id="doc-sharednew" checked> visible to users</label>
+      <input type="file" id="doc-file" multiple hidden></div>
+    <h4>Fonts <span class="muted small">${plural(r.families.length, 'family', 'families')}</span></h4>
+    <p class="small">${r.families.map((f) => `${esc(f.family)} <span class="muted">(${f.styles})</span>`).join(', ') || '<span class="muted">None assigned – select fonts in the Library and choose “Assign license”.</span>'}</p>
+    <h4>${l.seat_unit === 'devices' ? 'Devices' : 'People'} holding a seat <span class="muted small">${seatText(l)}</span></h4>
+    <p class="small">${(r.holders || []).map((h) => `${esc(h.name)}${h.extra ? ` <span class="muted">(${esc(h.extra)})</span>` : ''}`).join(', ') || '<span class="muted">Nobody yet.</span>'}</p>`,
+  { submit: 'Close', cancel: false, wide: true, onSubmit: async () => {} });
+  const reopen = () => { d.close(); done(); licenseDetail(id, done); };
+  $('#doc-add', d).onclick = () => $('#doc-file', d).click();
+  $('#doc-file', d).onchange = async (e) => {
+    const files = [...e.target.files];
+    if (!files.length) return;
+    const fd = new FormData();
+    fd.append('shared', $('#doc-sharednew', d).checked ? '1' : '0');
+    files.forEach((f) => fd.append('files', f, f.name));
+    try { await api('POST', `/api/licenses/${id}/documents`, fd); toast(`${plural(files.length, 'document')} attached`); reopen(); } catch (ex) { fail(ex); }
+  };
+  $$('.doc', d).forEach((row) => {
+    const did = row.dataset.doc;
+    $('.doc-shared', row).onchange = async (e) => {
+      try { await api('PATCH', `/api/licenses/${id}/documents/${did}`, { shared: e.target.checked }); toast(e.target.checked ? 'Visible to users' : 'Admins only'); } catch (ex) { fail(ex); }
+    };
+    $('.doc-del', row).onclick = async () => {
+      try { await api('DELETE', `/api/licenses/${id}/documents/${did}`); toast('Document removed'); reopen(); } catch (ex) { fail(ex); }
+    };
   });
 }
 

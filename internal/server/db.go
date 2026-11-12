@@ -142,6 +142,31 @@ ALTER TABLE fonts ADD COLUMN platforms TEXT NOT NULL DEFAULT '';
 ALTER TABLE fonts ADD COLUMN source_format TEXT NOT NULL DEFAULT '';
 ALTER TABLE fonts ADD COLUMN extras TEXT NOT NULL DEFAULT '[]';
 `,
+	// 4: license management – terms, rights, seat unit, enforcement, term
+	// dates and the license documents themselves (EULA, invoice…)
+	`
+ALTER TABLE licenses ADD COLUMN kind TEXT NOT NULL DEFAULT 'commercial';
+ALTER TABLE licenses ADD COLUMN spdx TEXT NOT NULL DEFAULT '';
+ALTER TABLE licenses ADD COLUMN rights TEXT NOT NULL DEFAULT '';
+ALTER TABLE licenses ADD COLUMN seat_unit TEXT NOT NULL DEFAULT 'users';
+ALTER TABLE licenses ADD COLUMN enforce INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE licenses ADD COLUMN reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE licenses ADD COLUMN url TEXT NOT NULL DEFAULT '';
+ALTER TABLE licenses ADD COLUMN purchased_on TEXT NOT NULL DEFAULT '';
+ALTER TABLE licenses ADD COLUMN expires_on TEXT NOT NULL DEFAULT '';
+CREATE TABLE license_documents (
+	id          INTEGER PRIMARY KEY,
+	license_id  INTEGER NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+	sha256      TEXT NOT NULL,
+	filename    TEXT NOT NULL,
+	size        INTEGER NOT NULL,
+	shared      INTEGER NOT NULL DEFAULT 1,
+	uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+	created_at  INTEGER NOT NULL
+);
+CREATE INDEX license_documents_license ON license_documents(license_id);
+CREATE INDEX fonts_license ON fonts(license_id);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {
