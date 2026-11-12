@@ -73,3 +73,25 @@ jobs:
       - name: End-to-end test incl. all-users service (Windows, admin)
         if: runner.os == 'Windows'
         run: bin\e2e.exe -server bin\typehaus-server.exe -agent bin\typehaus-agent.exe -font testdata\fonts\Poppins-Regular.ttf -machine
+
+  font-corpus:
+    name: font corpus (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            dirs: C:\Windows\Fonts
+          - os: macos-latest
+            dirs: /System/Library/Fonts /Library/Fonts
+          - os: ubuntu-latest
+            dirs: /usr/share/fonts
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Parse every system font
+        shell: bash
+        run: go run ./tools/fontscan -gha ${{ matrix.dirs }}
