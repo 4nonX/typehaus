@@ -171,7 +171,11 @@ var failed bool
 
 func fail(format string, a ...any) {
 	failed = true
-	fmt.Printf("FAIL: "+format+"\n", a...)
+	msg := fmt.Sprintf(format, a...)
+	fmt.Println("FAIL: " + msg)
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		fmt.Printf("::error title=e2e %s::%s\n", runtime.GOOS, strings.ReplaceAll(msg, "\n", " | "))
+	}
 	panic("e2e failed")
 }
 
