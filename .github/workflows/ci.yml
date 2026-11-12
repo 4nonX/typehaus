@@ -113,11 +113,13 @@ jobs:
           $env:CGO_ENABLED = '0'; $env:GOOS = 'windows'
           foreach ($arch in 'amd64', 'arm64') {
             $env:GOARCH = $arch
-            go build -ldflags "-X main.version=v0.0.0-ci" -o "out/win/typehaus-agent-windows-$arch.exe" ./cmd/typehaus-agent
-            go build -ldflags "-H=windowsgui -X main.version=v0.0.0-ci" -o "out/win/typehaus-agentw-windows-$arch.exe" ./cmd/typehaus-agent
+            # no version stamp: "dev" counts as current on the server
+            go build -o "out/win/typehaus-agent-windows-$arch.exe" ./cmd/typehaus-agent
+            go build -ldflags "-H=windowsgui" -o "out/win/typehaus-agentw-windows-$arch.exe" ./cmd/typehaus-agent
           }
           Remove-Item Env:GOARCH
-          makensis -V2 -DVERSION=0.0.0-ci "-DSRC=$PWD\out\win" "-DOUTFILE=$PWD\dist\typehaus-setup-windows.exe" packaging\windows\typehaus.nsi
+          # quoted: PowerShell splits an unquoted -DVERSION=0.0.0-ci at the dots
+          makensis -V2 "-DVERSION=0.0.0-ci" "-DSRC=$PWD\out\win" "-DOUTFILE=$PWD\dist\typehaus-setup-windows.exe" packaging\windows\typehaus.nsi
           if ($LASTEXITCODE) { exit 1 }
           pwsh packaging/windows/test-installer.ps1 dist\typehaus-setup-windows.exe
       - name: Pick test fonts (every format this OS handles)
@@ -147,7 +149,9 @@ jobs:
           set -e
           mkdir -p out/linux
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOARCH=$arch go build -ldflags "-X main.version=v0.0.0-ci" -o out/linux/typehaus-agent-linux-$arch ./cmd/typehaus-agent
+            # no version stamp: "dev" counts as current on the server (an
+            # "old" version would correctly not be sent Type 1 fonts)
+            CGO_ENABLED=0 GOARCH=$arch go build -o out/linux/typehaus-agent-linux-$arch ./cmd/typehaus-agent
           done
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.49.0
           NFPM="$(go env GOPATH)/bin/nfpm" packaging/linux/build.sh v0.0.0-ci out/linux dist
