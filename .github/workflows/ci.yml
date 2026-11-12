@@ -74,8 +74,8 @@ jobs:
           fonts="testdata/fonts/Poppins-Regular.woff2"
           case "$RUNNER_OS" in
             Linux)
-              pcf=$(ls /usr/share/fonts/X11/misc/*.pcf.gz | head -1)
-              t1=$(ls /usr/share/fonts/X11/Type1/*.t1 /usr/share/fonts/type1/urw-base35/*.t1 2>/dev/null | head -1)
+              pcf=$(find /usr/share/fonts -name '*.pcf.gz' | sort | head -1)
+              t1=$(find /usr/share/fonts -name '*.t1' | sort | head -1)
               afm="${t1%.t1}.afm"
               fonts="$fonts,$pcf"
               [ -n "$t1" ] && fonts="$fonts,$t1"
