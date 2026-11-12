@@ -20,9 +20,16 @@ function WaitFor([scriptblock]$cond, [int]$seconds = 20) {
   for ($i = 0; $i -lt $seconds * 2; $i++) { if (& $cond) { return $true }; Start-Sleep -Milliseconds 500 }
   return $false
 }
+# Wait for the setup itself only: Start-Process -Wait would also wait for the
+# typehaus app the setup starts, i.e. forever.
+function RunAndWait([string]$file, [string]$args, [int]$seconds = 120) {
+  $p = Start-Process -FilePath $file -ArgumentList $args -PassThru
+  if (-not $p.WaitForExit($seconds * 1000)) { Fail "$file $args did not finish within $seconds s" }
+  return $p.ExitCode
+}
 function Install([string]$what) {
-  $p = Start-Process -FilePath $Setup -ArgumentList '/S' -Wait -PassThru
-  if ($p.ExitCode -ne 0) { Fail "$what – setup exit code $($p.ExitCode)" }
+  $code = RunAndWait $Setup '/S'
+  if ($code -ne 0) { Fail "$what – setup exit code $code" }
   Ok "$what – setup finished"
 }
 
@@ -62,7 +69,7 @@ if (RunValue) { Fail 'update switched autostart back on' }
 Ok "the user's autostart choice is kept"
 
 # ---- 4. uninstall -------------------------------------------------------------
-$p = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+RunAndWait (Join-Path $dir 'uninstall.exe') '/S' | Out-Null
 # the NSIS uninstaller continues from a temporary copy: wait for it
 if (-not (WaitFor { -not (Test-Path $uninstKey) } 60)) { Fail 'Apps entry still present after uninstall' }
 if (-not (WaitFor { -not (Test-Path $dir) } 30)) { Fail "$dir still present after uninstall" }

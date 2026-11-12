@@ -85,6 +85,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest] # macOS: see the macos job
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # a hang must fail, not run for hours
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
