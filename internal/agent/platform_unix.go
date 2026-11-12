@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"github.com/4nonX/typehaus/internal/fontmeta"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -66,6 +67,20 @@ func (p *unixPlatform) acceptTypehausFonts() {
 		cfg = filepath.Join(home, ".config")
 	}
 	conf := filepath.Join(cfg, "fontconfig", "conf.d", "50-typehaus.conf")
+	// A <glob> accept only applies while scanning file names; distributions
+	// reject bitmaps by property (<patelt name="scalable">), which a glob
+	// cannot override. So every installed file is also whitelisted with an
+	// exact-path pattern, which fontconfig checks before its reject patterns.
+	var pats strings.Builder
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || fontmeta.CompanionExts[strings.ToLower(filepath.Ext(e.Name()))] {
+				continue
+			}
+			pats.WriteString("    <acceptfont><pattern><patelt name=\"file\"><string>" +
+				xmlEscape(filepath.Join(dir, e.Name())) + "</string></patelt></pattern></acceptfont>\n")
+		}
+	}
 	content := `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <!-- Written by typehaus: fonts you activate in typehaus are always usable,
@@ -75,7 +90,7 @@ func (p *unixPlatform) acceptTypehausFonts() {
     <acceptfont>
       <glob>` + xmlEscape(dir) + `/*</glob>
     </acceptfont>
-  </selectfont>
+` + pats.String() + `  </selectfont>
 </fontconfig>
 `
 	if b, err := os.ReadFile(conf); err == nil && string(b) == content {
