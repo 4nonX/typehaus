@@ -30,7 +30,12 @@ var (
 
 type winPlatform struct{ log *slog.Logger }
 
-func newPlatform(log *slog.Logger) (platform, error) { return &winPlatform{log: log}, nil }
+func newPlatform(log *slog.Logger) (platform, error) {
+	if machineMode {
+		return &machinePlatform{log: log}, nil
+	}
+	return &winPlatform{log: log}, nil
+}
 
 func (p *winPlatform) fontDir() (string, error) {
 	base := os.Getenv("LOCALAPPDATA")

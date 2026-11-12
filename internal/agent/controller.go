@@ -312,6 +312,7 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 				}
 			})
 		}
+		LoadMachineFontsIntoSession() // Windows: fonts the machine-wide service added
 		wait := interval
 		if backoff > 0 {
 			wait = min(time.Duration(1<<backoff)*15*time.Second, 15*time.Minute)

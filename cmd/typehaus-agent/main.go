@@ -46,6 +46,15 @@ Usage:
   typehaus-agent unenroll
       Remove all fonts installed by typehaus, disable autostart and forget
       this enrollment.
+
+Windows, for all users of this computer (administrator rights required):
+  typehaus-agent machine enroll --server URL --code CODE [--name NAME] [--ca-file FILE]
+  typehaus-agent machine install     Install and start the typehaus service
+  typehaus-agent machine status
+  typehaus-agent machine sync        Sync now (restarts the service)
+  typehaus-agent machine uninstall   Remove the service, its fonts and the enrollment
+      Fonts are installed into %%WINDIR%%\Fonts for every user. Needed only for
+      older applications that ignore per-user fonts.
   typehaus-agent version
 
 Environment:
@@ -81,6 +90,8 @@ func main() {
 		err = cmdAutostart(os.Args[2:])
 	case "unenroll":
 		err = cmdUnenroll()
+	case "machine":
+		err = cmdMachine(ctx, os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -387,4 +398,140 @@ func cmdUnenroll() error {
 	}
 	fmt.Println("Enrollment removed. Revoke the device in the web UI if it is still listed.")
 	return nil
+}
+
+// ---- machine-wide mode (Windows) ------------------------------------------
+
+func cmdMachine(ctx context.Context, args []string) error {
+	if !agent.MachineSupported() {
+		agent.SetMachineMode()
+		_, err := agent.InstallService() // returns the platform explanation
+		return err
+	}
+	if len(args) == 0 {
+		return errors.New("usage: typehaus-agent machine enroll|install|status|sync|uninstall")
+	}
+	agent.SetMachineMode()
+	if args[0] == "run" {
+		if agent.RunningAsService() {
+			return agent.RunService(runMachine)
+		}
+		return runMachine(ctx)
+	}
+	if !agent.IsElevated() {
+		return errors.New("administrator rights required – run this from an elevated terminal (\"Run as administrator\")")
+	}
+	switch args[0] {
+	case "enroll":
+		fs := flag.NewFlagSet("machine enroll", flag.ExitOnError)
+		server := fs.String("server", "", "typehaus server URL")
+		code := fs.String("code", "", "enrollment code from the web UI")
+		name := fs.String("name", "", "device name (default: hostname)")
+		ca := fs.String("ca-file", "", "PEM file with an additional CA to trust")
+		fs.Parse(args[1:])
+		if *server == "" || *code == "" {
+			return errors.New("--server and --code are required")
+		}
+		host, _ := os.Hostname()
+		if *name == "" {
+			*name = host + " (all users)"
+		}
+		cfg, err := agent.Enroll(ctx, *server, *code, *name, *ca)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Enrolled this computer for all users as %s on %s (device %d).\n", cfg.User, cfg.Server, cfg.DeviceID)
+		fmt.Println("The fonts activated by this account will be installed for every user of this computer.")
+		fmt.Println("Next: typehaus-agent machine install")
+		return nil
+	case "install":
+		if _, err := agent.LoadConfig(); err != nil {
+			return errors.New("not enrolled yet – run 'typehaus-agent machine enroll' first")
+		}
+		bin, err := agent.InstallService()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Service %q installed and started (%s).\n", agent.ServiceName, bin)
+		return nil
+	case "status":
+		fmt.Println("Service:   ", agent.ServiceStatus())
+		if cfg, err := agent.LoadConfig(); err == nil {
+			fmt.Printf("Server:     %s\nAccount:    %s\nDevice ID:  %d\n", cfg.Server, cfg.User, cfg.DeviceID)
+		} else {
+			fmt.Println("Enrollment: none")
+		}
+		if st, err := agent.LoadState(); err == nil {
+			if !st.LastSync.IsZero() {
+				fmt.Printf("Last sync:  %s\n", st.LastSync.Format(time.RFC3339))
+			}
+			if st.LastErr != "" {
+				fmt.Println("Last error:", st.LastErr)
+			}
+			n := 0
+			for _, f := range st.Fonts {
+				if !f.PendingRemoval {
+					n++
+				}
+			}
+			fmt.Printf("Installed:  %d font file(s) for all users\n", n)
+		}
+		return nil
+	case "sync":
+		if err := agent.RestartService(); err != nil {
+			return err
+		}
+		fmt.Println("Service restarted – it syncs right away. Check 'typehaus-agent machine status'.")
+		return nil
+	case "uninstall":
+		if err := agent.UninstallService(); err != nil {
+			return err
+		}
+		cfg, err := agent.LoadConfig()
+		if err == nil {
+			a, err := agent.New(cfg, consoleLogger())
+			if err != nil {
+				return err
+			}
+			removed, failed, err := a.RemoveAll()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Removed %d font file(s) for all users", removed)
+			if failed > 0 {
+				fmt.Printf(" (%d in use – deleted at the next restart)", failed)
+			}
+			fmt.Println(".")
+		}
+		if err := agent.RemoveConfig(); err != nil {
+			return err
+		}
+		fmt.Println("Service removed and enrollment forgotten. Revoke the device in the web UI if it is still listed.")
+		return nil
+	}
+	return fmt.Errorf("unknown machine command %q", args[0])
+}
+
+// runMachine is the service body: sync loop with logging to the protected
+// machine directory.
+func runMachine(ctx context.Context) error {
+	log, closeLog := fileLogger()
+	defer closeLog()
+	cfg, err := agent.LoadConfig()
+	if err != nil {
+		log.Error("machine service: not enrolled", "err", err)
+		return err
+	}
+	log.Info("typehaus machine service starting", "version", version, "server", cfg.Server, "account", cfg.User)
+	a, err := agent.New(cfg, log)
+	if err != nil {
+		return err
+	}
+	err = a.Run(ctx)
+	if errors.Is(err, agent.ErrRevoked) {
+		agent.RemoveConfig()
+		log.Info("device revoked – fonts removed, enrollment forgotten")
+		return nil
+	}
+	return err
 }

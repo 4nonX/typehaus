@@ -71,8 +71,12 @@ type State struct {
 	Fonts         map[string]*Installed `json:"fonts"`
 }
 
-// ConfigDir returns the per-user directory for config and state.
+// ConfigDir returns the per-user directory for config and state (or the
+// protected machine directory in machine-wide mode).
 func ConfigDir() (string, error) {
+	if machineMode {
+		return machineDir()
+	}
 	if d := os.Getenv("TYPEHAUS_AGENT_HOME"); d != "" {
 		return d, nil
 	}
@@ -219,8 +223,12 @@ func Enroll(ctx context.Context, server, code, name, caFile string) (*Config, er
 		return nil, err
 	}
 	host, _ := os.Hostname()
+	platform := runtime.GOOS
+	if machineMode {
+		platform += "-machine" // shown as "all users" in the device list
+	}
 	body, _ := json.Marshal(protocol.EnrollRequest{
-		Code: code, DeviceName: name, Platform: runtime.GOOS, Hostname: host, AgentVersion: Version,
+		Code: code, DeviceName: name, Platform: platform, Hostname: host, AgentVersion: Version,
 	})
 	req, _ := http.NewRequestWithContext(ctx, "POST", server+"/api/agent/enroll", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -361,7 +369,14 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	st.ServerVersion = m.ServerVersion
 
 	want := map[string]protocol.ManifestFont{}
+	machine := map[string]bool{}
+	if !machineMode {
+		machine = MachineInstalled() // fonts already installed for all users on this PC
+	}
 	for _, f := range m.Fonts {
+		if machine[f.SHA256] {
+			continue // avoid the same font twice (per-user and machine-wide)
+		}
 		want[f.SHA256] = f
 	}
 	changed := false
@@ -444,6 +459,9 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	st.LastSync, st.LastErr = time.Now(), ""
 	if err := saveState(st); err != nil {
 		return nil, err
+	}
+	if machineMode {
+		publishMachineFonts(st)
 	}
 	if err := a.report(ctx, st, res.Errors); err != nil {
 		a.log.Warn("report failed", "err", err)
@@ -554,6 +572,9 @@ func (a *Agent) RemoveAll() (removed int, failed int, err error) {
 	}
 	st.ETag = ""
 	a.sys.refresh()
+	if machineMode {
+		publishMachineFonts(st)
+	}
 	return removed, failed, saveState(st)
 }
 

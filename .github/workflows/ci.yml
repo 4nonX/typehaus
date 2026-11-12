@@ -44,3 +44,32 @@ jobs:
           unzip -q dist/agents/typehaus-agent-darwin-universal.app.zip -d /tmp/app
           lipo -info /tmp/app/typehaus.app/Contents/MacOS/typehaus-agent
           codesign --verify --verbose /tmp/app/typehaus.app
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install fontconfig
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fontconfig
+      - name: Build
+        shell: bash
+        run: |
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          go build -o "bin/typehaus-server$ext" ./cmd/typehaus-server
+          go build -o "bin/typehaus-agent$ext" ./cmd/typehaus-agent
+          go build -o "bin/e2e$ext" ./tools/e2e
+      - name: End-to-end test (per-user install, removal, revocation)
+        if: runner.os != 'Windows'
+        run: bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font testdata/fonts/Poppins-Regular.ttf
+      - name: End-to-end test incl. all-users service (Windows, admin)
+        if: runner.os == 'Windows'
+        run: bin\e2e.exe -server bin\typehaus-server.exe -agent bin\typehaus-agent.exe -font testdata\fonts\Poppins-Regular.ttf -machine

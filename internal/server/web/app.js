@@ -469,6 +469,13 @@ async function upload(files) {
 
 // ---------------------------------------------------------------------------
 // devices
+function platformLabel(p) {
+  const os = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
+  if (p && p.endsWith('-machine')) {
+    return `${os[p.slice(0, -8)] || esc(p)} <span class="badge warn" title="Fonts are installed for every user of this computer">all users</span>`;
+  }
+  return os[p] || esc(p);
+}
 // ---------------------------------------------------------------------------
 async function renderDevices(page) {
   const showAll = S.me.is_admin && new URLSearchParams(location.hash.split('?')[1] || '').get('all') === '1';
@@ -505,7 +512,7 @@ async function renderDevices(page) {
       ${devices.map((d) => {
         const fresh = d.last_seen && Date.now() / 1000 - d.last_seen < 600;
         return `<tr><td><span class="dot ${fresh ? 'ok' : 'warn'}"></span><b>${esc(d.name)}</b>${d.hostname && d.hostname !== d.name ? ` <span class="muted small">${esc(d.hostname)}</span>` : ''}</td>
-        ${showAll ? `<td>${esc(d.username)}</td>` : ''}<td>${esc(d.platform)}</td>
+        ${showAll ? `<td>${esc(d.username)}</td>` : ''}<td>${platformLabel(d.platform)}</td>
         <td title="${d.last_seen ? fmtDate(d.last_seen) : ''}${d.last_ip ? ' · ' + esc(d.last_ip) : ''}">${ago(d.last_seen)}</td>
         <td class="num">${d.installed}</td><td class="mono">${esc(d.agent_version || '–')}</td>
         <td style="text-align:right"><button class="btn sm danger" data-revoke="${d.id}" data-name="${esc(d.name)}">Revoke</button></td></tr>`;
