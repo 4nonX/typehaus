@@ -24,6 +24,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 - **Duplicate font handling:** files with the same PostScript name (e.g. two versions) are marked in the library and on upload. Only one of them can be active per user, and activating one switches the other off.
 - **Private certificates:** the app window accepts a custom CA certificate when connecting.
 - `typehaus-server reset-password NAME` for recovering admin access (works via `docker exec`).
+- **Windows: fonts for all users.** `typehaus-agent machine enroll|install|status|sync|uninstall` sets up a Windows service that installs one account's fonts into `%WINDIR%\Fonts` for every user, for older applications that ignore per-user fonts. The device is marked *all users*. The per-user app skips those fonts and loads newly added ones into the running session.
+- **Code signing pipeline:** Windows builds are signed via SignPath Foundation, macOS builds are signed with a Developer ID and notarized. Each switches on when its credentials are configured (`docs/signing.md`, `CODE_SIGNING_POLICY.md`). Signed agents are also bundled in the Docker image.
+- **End-to-end tests on real Windows, macOS and Linux runners** in CI (`tools/e2e`): install, visibility to applications, removal, revocation, and on Windows the all-users service.
 
 ### Changed
 - `autostart enable` registers the tray app (or headless `run` mode where no tray is available). Login launches don't open the window.

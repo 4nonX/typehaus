@@ -100,13 +100,23 @@ Every user installs the typehaus app on their computers. The Devices page links 
 2. Open the app. Its window asks for the **server address** and the **code**; both are shown on the Devices page with Copy buttons.
 3. Click **Connect**. Fonts you switch on in the Library arrive within a minute, and the app starts automatically at login.
 
-The apps aren't code-signed with a paid certificate yet, so the operating system asks once:
+Unless your typehaus build is signed (see [signing](signing.md)), the operating system asks once:
 
 - **Windows:** SmartScreen shows "Windows protected your PC". Click **More info → Run anyway**.
 - **macOS:** unzip `typehaus-agent-darwin-universal.app.zip` and **move typehaus.app to Applications** first (otherwise it can't start at login). Then open it:
   - **macOS 15 Sequoia and newer:** opening it shows a warning. Click **Done**, go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to typehaus, then confirm.
   - **macOS 14 and older:** right-click typehaus.app → **Open** → **Open**.
 - **Linux:** `chmod +x typehaus-agent-linux-amd64` and run it. The tray icon needs a StatusNotifier panel (KDE, Xfce, Cinnamon, or GNOME with the *AppIndicator* extension). Without one, typehaus keeps syncing in the background, and running it again opens its window.
+
+**Shared PCs and older Windows applications:** some older Windows programs only list fonts installed for all users. An administrator can install the typehaus service on such PCs; it installs the fonts of one typehaus account (e.g. `pc-reception`) for everyone who signs in there:
+
+```powershell
+# elevated PowerShell
+.\typehaus-agent-windows-amd64.exe machine enroll --server https://fonts.example.com --code ABCD-EFGH-JKLM
+.\typehaus-agent-windows-amd64.exe machine install
+```
+
+The device shows an **all users** badge on the Devices page. Remember that every user of that PC can use those fonts when you count license seats.
 
 Company-managed computers can also be set up from the command line, for example with a software deployment tool:
 
@@ -143,5 +153,5 @@ To restore, stop the stack, put `typehaus.db` and `fonts/` back into the volume 
 | Uploads fail with *413 Request Entity Too Large* | Raise the proxy's body size limit (see above). |
 | App says "Can't reach that server" | Check the address (including `https://`) from that computer's browser. With Pangolin or Cloudflare Access, exclude `/api/agent/*`. |
 | App says the certificate isn't trusted | Private CA: install it in the OS trust store, or paste it under *Advanced* when connecting. |
-| Fonts don't show up in an application | Restart the application; some apps only read the font list at start. A few older Windows apps only see fonts installed for all users. |
+| Fonts don't show up in an application | Restart the application; some apps only read the font list at start. Older Windows apps that only see fonts installed for all users need the [typehaus service](#install-the-app-on-computers) (`machine install`). |
 | Lost admin password | `docker exec typehaus typehaus-server reset-password admin` prints a new password (in Dockge: the stack's terminal, or the host shell). It also re-enables the account and makes it an administrator. |

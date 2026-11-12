@@ -74,6 +74,22 @@ The menu offers *Open typehaus* (the window: status, installed fonts with live p
 
 On Linux the tray needs a StatusNotifier host (KDE, Xfce, Cinnamon, GNOME with the *AppIndicator* extension). Without one, typehaus keeps syncing in the background, and launching it again opens the window.
 
+### Windows: fonts for all users
+
+A few older Windows applications only list fonts installed for *all* users and ignore per-user fonts. For such PCs, an administrator can additionally install the **typehaus service**, which installs the fonts of one typehaus account into `%WINDIR%\Fonts` for every user of the computer:
+
+```powershell
+# elevated PowerShell ("Run as administrator")
+.\typehaus-agent-windows-amd64.exe machine enroll --server https://fonts.example.com --code ABCD-EFGH-JKLM
+.\typehaus-agent-windows-amd64.exe machine install
+```
+
+- The fonts come from the account that created the enrollment code. Use a dedicated account per PC or per room (e.g. `pc-reception`) and give it the collections that PC needs.
+- The device appears with an **all users** badge, because everyone who signs in to that computer can use those fonts. Keep that in mind for licenses.
+- The service runs as LocalSystem. Its configuration and device token live in `%ProgramData%\typehaus\machine`, readable only by administrators.
+- The per-user tray app can run alongside it: it skips fonts the machine already has and makes newly added machine fonts available in the current session immediately. Without it, they appear at the next sign-in.
+- `machine status`, `machine sync`, and `machine uninstall` (removes the service, its fonts and the enrollment).
+
 ### Command line
 
 The same binary is a CLI for scripting and headless machines:
@@ -92,6 +108,7 @@ typehaus-agent autostart enable
 | `sync [--force]` | Sync once. `--force` re-verifies every installed file. |
 | `status` | Show the server, user, last sync and installed fonts. |
 | `unenroll` | Remove all fonts typehaus installed, disable autostart, forget the enrollment. |
+| `machine enroll\|install\|status\|sync\|uninstall` | Windows only, as administrator: fonts for all users (see above). |
 
 **How fonts are activated (all per user, no elevation):**
 
@@ -108,7 +125,7 @@ Behaviour worth knowing:
 - **Fonts in use:** a font that can't be removed because an application has it open (Windows) is retried on every sync.
 - **Integrity:** every download is verified against its SHA-256. Missing or damaged files are reinstalled automatically.
 - Only files the agent installed itself are ever touched. Your own fonts are left alone.
-- The apps aren't notarised or code-signed with a certificate yet. On Windows, SmartScreen asks once (*More info → Run anyway*). On macOS, move typehaus.app to *Applications* first. Then on macOS 15+ open it once, go to *System Settings → Privacy & Security → Open Anyway*; on older macOS, right-click → *Open*.
+- **Signing:** the release pipeline signs Windows builds (SignPath Foundation) and signs and notarizes macOS builds (Apple Developer ID) once the credentials are configured; see [docs/signing.md](docs/signing.md). Until then, Windows SmartScreen asks once (*More info → Run anyway*). On macOS, move typehaus.app to *Applications* first; then on macOS 15+ open it once and go to *System Settings → Privacy & Security → Open Anyway*, or on older macOS right-click → *Open*.
 - **Updates:** when the server runs a newer version, the app shows *Update available* in its menu and window. The new download replaces the running app and takes over *Start at login*.
 - **Account disabled:** the app removes its fonts but stays connected; they come back automatically when the account is enabled again. Revoking a device or deleting the user disconnects it for good.
 - **Duplicate fonts:** files with the same PostScript name (e.g. two versions of a family) are marked in the library, and only one of them can be active per user. Activating one switches the other off.
@@ -185,7 +202,7 @@ Layout:
 
 ```
 cmd/typehaus-server     server entrypoint
-cmd/typehaus-agent      agent CLI
+cmd/typehaus-agent      agent CLI (tray, headless, Windows service)
 internal/server         HTTP API, auth, storage, embedded web UI (internal/server/web)
 internal/agent          sync engine, per-OS activation and autostart, controller
 internal/agent/tray     tray / menu-bar UI
@@ -196,6 +213,13 @@ internal/protocol       agent ⇄ server wire format
 ```
 
 The web UI and the agent window are plain HTML/CSS/JS with no build step.
+
+End-to-end test against a real server, on the current OS (CI runs it on Linux, Windows incl. the all-users service, and macOS):
+
+```sh
+go build -o bin/ ./cmd/... ./tools/e2e
+bin/e2e -server bin/typehaus-server -agent bin/typehaus-agent -font testdata/fonts/Poppins-Regular.ttf
+```
 
 Icons and brand files are generated from `internal/brand`:
 
