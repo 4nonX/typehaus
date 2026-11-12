@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
 ### Added
 - **Every font format.** Besides TrueType/OpenType (incl. variable, colour and collections), typehaus now imports:
   - WOFF, WOFF2 and EOT web fonts, converted to TTF/OTF on upload
@@ -82,6 +84,7 @@ The section matching a release tag becomes that release's notes on GitHub.
 - Agent binaries for all platforms bundled in the image and offered on the Devices page.
 - CI and release workflows publishing the container image to GHCR and binaries to GitHub releases.
 
-[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/4nonX/typehaus/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/4nonX/typehaus/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/4nonX/typehaus/releases/tag/v0.1.0
