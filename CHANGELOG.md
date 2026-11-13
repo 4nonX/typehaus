@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Changed
+- When a font preview can't be shown, the library now says why – the file was blocked before it arrived (typically a browser extension or network filter), the server answered with an error, or the browser refused the file – instead of always blaming the format. Details go to the browser console, and the next attempt tries again instead of remembering the failure.
+
 ## [1.1.1] - 2026-11-13
 
 ### Fixed

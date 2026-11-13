@@ -301,10 +301,26 @@ function loadFace(id) {
   if (!faceCache.has(id)) {
     const fam = `thf${id}`;
     const ff = new FontFace(fam, `url(/api/fonts/${id}/file)`);
-    faceCache.set(id, ff.load().then((f) => { document.fonts.add(f); return fam; }).catch(() => null));
+    faceCache.set(id, ff.load().then((f) => { document.fonts.add(f); return fam; }).catch(async (err) => {
+      // say why: the server's answer, or the browser refusing the file
+      let why = 'this browser refused the font file';
+      try {
+        const r = await fetch(`/api/fonts/${id}/file`, { cache: 'no-store', headers: { 'X-Typehaus': '1' } });
+        if (!r.ok) why = `the server answered ${r.status}`;
+        else if (!/^font\//.test(r.headers.get('Content-Type') || '')) why = 'this format can\'t be shown in a browser';
+      } catch (e) { why = 'the file was blocked before it arrived (an extension or network filter?)'; }
+      console.warn(`typehaus: no preview for font ${id}: ${why}`, err);
+      faceCache.delete(id); // a later attempt may work
+      return { failed: why };
+    }));
   }
   return faceCache.get(id);
 }
+const previewFailed = (el, fam) => {
+  el.classList.add('nopreview');
+  el.textContent = `No preview – ${fam.failed}`;
+  el.title = 'Details are in the browser console';
+};
 const previewObserver = new IntersectionObserver((entries) => {
   for (const en of entries) {
     if (!en.isIntersecting) continue;
@@ -312,8 +328,8 @@ const previewObserver = new IntersectionObserver((entries) => {
     previewObserver.unobserve(el);
     loadFace(+el.dataset.font).then((fam) => {
       el.classList.remove('loading');
-      if (fam) el.style.fontFamily = `"${fam}", "Adobe NotDef", monospace`;
-      else { el.classList.add('nopreview'); el.textContent = 'No browser preview for this format'; }
+      if (typeof fam === 'string') el.style.fontFamily = `"${fam}", "Adobe NotDef", monospace`;
+      else previewFailed(el, fam);
     });
   }
 }, { rootMargin: '300px' });
@@ -1538,8 +1554,8 @@ async function familyInfo(fam) {
   });
   const showFace = (id) => loadFace(id).then((ff) => $$('.wf-txt', d).forEach((el) => {
     el.classList.remove('loading');
-    if (ff) el.style.fontFamily = `"${ff}", "Adobe NotDef", monospace`;
-    else { el.classList.add('nopreview'); el.textContent = 'No browser preview for this format'; }
+    if (typeof ff === 'string') el.style.fontFamily = `"${ff}", "Adobe NotDef", monospace`;
+    else previewFailed(el, ff);
   }));
   showFace(r.id);
   const wfFace = $('#wf-face', d);
@@ -2344,7 +2360,8 @@ const catalogObserver = new IntersectionObserver((entries) => {
     const face = el.dataset.font ? loadFace(+el.dataset.font) : loadCatalogFace(el.dataset.cat);
     face.then((fam) => {
       el.classList.remove('loading');
-      if (fam) el.style.fontFamily = `"${fam}", "Adobe NotDef", sans-serif`;
+      if (typeof fam === 'string') el.style.fontFamily = `"${fam}", "Adobe NotDef", sans-serif`;
+      else if (fam && fam.failed) previewFailed(el, fam);
       else { el.classList.add('nopreview'); el.textContent = 'No preview'; }
     });
   }
