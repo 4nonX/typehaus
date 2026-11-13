@@ -118,6 +118,16 @@ type licenseRow struct {
 	Over         bool         `json:"over"`
 	Full         bool         `json:"full"`
 	Documents    []licenseDoc `json:"documents"`
+	// licenses for named people: only they may use the fonts
+	NamedUsers   bool       `json:"named_users"`    // the license names people
+	LicensedToMe bool       `json:"licensed_to_me"` // the caller is one of them
+	LicensedTo   []licensee `json:"licensed_to"`    // who (administrators only)
+}
+
+type licensee struct {
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
 }
 
 // status is a one-word summary for reports.
@@ -199,7 +209,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	byID := map[int64]*licenseRow{}
 	nowT := time.Now()
 	for rows.Next() {
-		l := &licenseRow{Documents: []licenseDoc{}}
+		l := &licenseRow{Documents: []licenseDoc{}, LicensedTo: []licensee{}}
 		var rights string
 		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download, &l.LeaseDays, &l.WebPageviews,
 			&l.CountAdmins, &l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
@@ -237,6 +247,28 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	nrows, err := s.db.Query(`SELECT lu.license_id, us.id, us.username, us.display_name FROM license_users lu
+		JOIN users us ON us.id = lu.user_id ORDER BY COALESCE(NULLIF(us.display_name, ''), us.username) COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	for nrows.Next() {
+		var lid int64
+		var p licensee
+		nrows.Scan(&lid, &p.ID, &p.Username, &p.DisplayName)
+		l := byID[lid]
+		if l == nil {
+			continue
+		}
+		l.NamedUsers = true
+		if p.ID == u.ID && u.Token == nil {
+			l.LicensedToMe = true
+		}
+		if u.IsAdmin {
+			l.LicensedTo = append(l.LicensedTo, p)
+		}
+	}
+	nrows.Close()
 	dq := `SELECT d.id, d.license_id, d.filename, d.kind, d.size, d.shared, d.created_at, COALESCE(d.updated_at, 0),
 		COALESCE(NULLIF(us.display_name, ''), us.username, '') FROM license_documents d LEFT JOIN users us ON us.id = d.uploaded_by`
 	if !u.IsAdmin {
@@ -382,6 +414,72 @@ type licenseReq struct {
 	PurchasedOn  *string   `json:"purchased_on"`
 	ExpiresOn    *string   `json:"expires_on"`
 	Notes        *string   `json:"notes"`
+	// the people the license is for (user ids); an empty list makes it
+	// a license for everyone who can see the fonts again
+	LicensedTo *[]int64 `json:"licensed_to"`
+}
+
+// checkLicensees validates the named people against the seats the license
+// will have. id 0: a new license.
+func (s *Server) checkLicensees(id int64, req *licenseReq) ([]int64, error) {
+	seats, unit := 0, "users"
+	if id != 0 {
+		s.db.QueryRow(`SELECT seats, seat_unit FROM licenses WHERE id = ?`, id).Scan(&seats, &unit)
+	}
+	if req.Seats != nil {
+		seats = *req.Seats
+	}
+	if req.SeatUnit != nil {
+		unit = *req.SeatUnit
+	}
+	var ids []int64
+	if req.LicensedTo != nil {
+		seen := map[int64]bool{}
+		for _, uid := range *req.LicensedTo {
+			if seen[uid] {
+				continue
+			}
+			seen[uid] = true
+			if !s.exists("users", uid) {
+				return nil, fmt.Errorf("user %d not found", uid)
+			}
+			ids = append(ids, uid)
+		}
+	} else if id != 0 {
+		rows, err := s.db.Query(`SELECT user_id FROM license_users WHERE license_id = ?`, id)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var uid int64
+			rows.Scan(&uid)
+			ids = append(ids, uid)
+		}
+		rows.Close()
+	}
+	if unit == "users" && seats > 0 && len(ids) > seats {
+		return nil, fmt.Errorf("%d people named, but the license has %d user seats", len(ids), seats)
+	}
+	return ids, nil
+}
+
+// setLicensees replaces the people a license is for.
+func (s *Server) setLicensees(id int64, ids []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM license_users WHERE license_id = ?`, id); err != nil {
+		return err
+	}
+	t := now()
+	for _, uid := range ids {
+		if _, err := tx.Exec(`INSERT INTO license_users (license_id, user_id, created_at) VALUES (?, ?, ?)`, id, uid, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // columns validates the request and returns the columns to set.
@@ -490,6 +588,11 @@ func (s *Server) handleCreateLicense(w http.ResponseWriter, r *http.Request, u *
 		writeErr(w, 400, err.Error())
 		return
 	}
+	named, err := s.checkLicensees(0, &req)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	if _, ok := cols["rights"]; !ok {
 		cols["rights"] = "desktop"
 	}
@@ -506,6 +609,12 @@ func (s *Server) handleCreateLicense(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	id, _ := res.LastInsertId()
+	if len(named) > 0 {
+		if err := s.setLicensees(id, named); err != nil {
+			s.internalErr(w, err)
+			return
+		}
+	}
 	s.audit(u, "license.create", "%s", cols["name"])
 	s.emit("license.created", map[string]any{"license": s.eventLicense(id), "by": u.Username})
 	writeJSON(w, 201, map[string]int64{"id": id})
@@ -539,25 +648,40 @@ func (s *Server) handleUpdateLicense(w http.ResponseWriter, r *http.Request, u *
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if len(cols) == 0 {
-		writeJSON(w, 200, map[string]bool{"ok": true})
-		return
-	}
-	names, vals := sortedCols(cols)
-	for i := range names {
-		names[i] += " = ?"
-	}
-	res, err := s.db.Exec(`UPDATE licenses SET `+strings.Join(names, ", ")+` WHERE id = ?`, append(vals, id)...)
-	if err != nil {
-		s.internalErr(w, err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !s.exists("licenses", id) {
 		writeErr(w, 404, "license not found")
 		return
 	}
-	s.audit(u, "license.update", "license %d: %s", id, strings.Join(sortedKeys(cols), ", "))
-	s.emit("license.updated", map[string]any{"license": s.eventLicense(id), "changed": sortedKeys(cols), "by": u.Username})
+	named, err := s.checkLicensees(id, &req)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	changed := sortedKeys(cols)
+	if len(cols) > 0 {
+		names, vals := sortedCols(cols)
+		for i := range names {
+			names[i] += " = ?"
+		}
+		if _, err := s.db.Exec(`UPDATE licenses SET `+strings.Join(names, ", ")+` WHERE id = ?`, append(vals, id)...); err != nil {
+			s.internalErr(w, err)
+			return
+		}
+	}
+	if req.LicensedTo != nil {
+		if err := s.setLicensees(id, named); err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		changed = append(changed, "licensed_to")
+		sort.Strings(changed)
+	}
+	if len(changed) == 0 {
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	s.audit(u, "license.update", "license %d: %s", id, strings.Join(changed, ", "))
+	s.emit("license.updated", map[string]any{"license": s.eventLicense(id), "changed": changed, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -1036,27 +1160,33 @@ func (s *Server) handleDetectLicenses(w http.ResponseWriter, r *http.Request, u 
 
 // ---- enforcement ----------------------------------------------------------------
 
-// activationRefusals checks enforced licenses before a user activates fonts.
-// It returns the fonts that must not be activated and why.
+// activationRefusals checks licenses before a user activates fonts: a
+// license for named people refuses everyone else, an enforced license
+// refuses after its term and beyond its seats. It returns the fonts that
+// must not be activated and why.
 func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bool, []string) {
 	if len(fontIDs) == 0 {
 		return nil, nil
 	}
 	var isAdmin bool
 	s.db.QueryRow(`SELECT is_admin FROM users WHERE id = ?`, userID).Scan(&isAdmin)
-	rows, err := s.db.Query(`SELECT f.id, l.id, l.name, l.seats, l.seat_unit, l.expires_on, l.count_admins,
-		EXISTS(SELECT 1 FROM user_fonts a WHERE a.font_id = f.id AND a.user_id = ?)
+	rows, err := s.db.Query(`SELECT f.id, l.id, l.name, l.enforce, l.seats, l.seat_unit, l.expires_on, l.count_admins,
+		EXISTS(SELECT 1 FROM user_fonts a WHERE a.font_id = f.id AND a.user_id = ?1),
+		EXISTS(SELECT 1 FROM license_users lu WHERE lu.license_id = l.id),
+		EXISTS(SELECT 1 FROM license_users lu WHERE lu.license_id = l.id AND lu.user_id = ?1)
 		FROM fonts f JOIN licenses l ON l.id = f.license_id
-		WHERE l.enforce = 1 AND f.id IN (`+placeholders(len(fontIDs))+`)`, append([]any{userID}, int64Args(fontIDs)...)...)
+		WHERE (l.enforce = 1 OR EXISTS(SELECT 1 FROM license_users lu WHERE lu.license_id = l.id))
+		AND f.id IN (`+placeholders(len(fontIDs))+`)`, append([]any{userID}, int64Args(fontIDs)...)...)
 	if err != nil {
 		s.log.Error("license check", "err", err)
 		return nil, nil
 	}
 	type lic struct {
-		name, unit, expires string
-		seats               int
-		countAdmins         bool
-		fonts               []int64
+		name, unit, expires  string
+		seats                int
+		enforce, countAdmins bool
+		named, mine          bool
+		fonts                []int64
 	}
 	lics := map[int64]*lic{}
 	var order []int64
@@ -1064,9 +1194,12 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 		var fid, lid int64
 		var l lic
 		var already bool
-		rows.Scan(&fid, &lid, &l.name, &l.seats, &l.unit, &l.expires, &l.countAdmins, &already)
-		if already || (isAdmin && !l.countAdmins) {
-			continue // already active, or an admin this license does not count
+		rows.Scan(&fid, &lid, &l.name, &l.enforce, &l.seats, &l.unit, &l.expires, &l.countAdmins, &already, &l.named, &l.mine)
+		if isAdmin && !l.countAdmins {
+			continue // an admin this license does not count
+		}
+		if already && !(l.named && !l.mine) {
+			continue // already active
 		}
 		if lics[lid] == nil {
 			lics[lid] = &l
@@ -1081,9 +1214,14 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 	for _, lid := range order {
 		l := lics[lid]
 		reason := ""
-		if expired, _ := expiry(l.expires, nowT); expired {
+		if l.named && !l.mine {
+			reason = fmt.Sprintf("the license “%s” is for named people only", l.name)
+		} else if !l.enforce {
+			// named, and this person is named
+		} else if expired, _ := expiry(l.expires, nowT); expired {
 			reason = fmt.Sprintf("the license “%s” expired on %s", l.name, l.expires)
-		} else if l.unit == "users" && l.seats > 0 {
+		} else if l.unit == "users" && l.seats > 0 && !l.named {
+			// with named people, the names are the seats
 			var holder bool
 			var used int
 			s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1 AND a.user_id = ?2),
@@ -1117,6 +1255,32 @@ type deviceLicenseGate struct {
 	nowT       time.Time
 	holders    map[int64]map[int64]bool
 	people     map[int64]map[int64]bool // per-user licenses: who holds a seat
+	named      map[int64]map[int64]bool // licenses for named people: who is named (nil: nobody, the license is for everyone)
+}
+
+// namedPeople returns who a license is for, or nil when it names nobody.
+func (g *deviceLicenseGate) namedPeople(lid int64) map[int64]bool {
+	if g.named == nil {
+		g.named = map[int64]map[int64]bool{}
+	}
+	if n, ok := g.named[lid]; ok {
+		return n
+	}
+	var n map[int64]bool
+	rows, err := g.s.db.Query(`SELECT user_id FROM license_users WHERE license_id = ?`, lid)
+	if err == nil {
+		for rows.Next() {
+			var u int64
+			rows.Scan(&u)
+			if n == nil {
+				n = map[int64]bool{}
+			}
+			n[u] = true
+		}
+		rows.Close()
+	}
+	g.named[lid] = n
+	return n
 }
 
 // seatHolders decides who holds the seats of an enforced per-user license
@@ -1147,7 +1311,15 @@ func (g *deviceLicenseGate) seatHolders(lid int64, seats int, countAdmins bool) 
 }
 
 func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, unit, expires string, countAdmins bool) bool {
-	if !lid.Valid || !enforce || (g.ownerAdmin && !countAdmins) {
+	if !lid.Valid || (g.ownerAdmin && !countAdmins) {
+		return true
+	}
+	named := g.namedPeople(lid.Int64)
+	if named != nil && (g.machine || !named[g.user]) {
+		// for named people only; on an all-users computer everyone could use it
+		return false
+	}
+	if !enforce {
 		return true
 	}
 	if expired, _ := expiry(expires, g.nowT); expired {
@@ -1155,6 +1327,9 @@ func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, un
 	}
 	if seats <= 0 {
 		return true
+	}
+	if unit != "devices" && named != nil {
+		return true // the names are the seats
 	}
 	if unit != "devices" {
 		if g.machine {
@@ -1218,7 +1393,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		map[string]string{"filename": "typehaus-licenses-" + time.Now().Format(dateLayout) + ".csv"}))
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
-	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Peak (12 months)", "Status", "Enforced",
+	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "Licensed to", "In use", "Peak (12 months)", "Status", "Enforced",
 		"Admins counted", "Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Copies outside typehaus", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
@@ -1241,12 +1416,16 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		if s.cfg.Inventory {
 			outside = strconv.Itoa(copies[l.ID])
 		}
-		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used), strconv.Itoa(peak),
+		named := make([]string, len(l.LicensedTo))
+		for i, p := range l.LicensedTo {
+			named[i] = p.Username
+		}
+		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strings.Join(named, ", "), strconv.Itoa(l.Used), strconv.Itoa(peak),
 			l.status(), enforced, yesNo(l.CountAdmins), yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
 			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), outside, l.URL, strings.Join(docs, "; ")})
 	}
 	if unassigned > 0 {
-		cw.Write([]string{"(no license assigned)", "", "", "", "", "", "", fmt.Sprintf("%d families", unassigned)})
+		cw.Write([]string{"(no license assigned)", "", "", "", "", "", "", "", fmt.Sprintf("%d families", unassigned)})
 	}
 	cw.Flush()
 	s.audit(u, "license.export", "%d licenses", len(ls))

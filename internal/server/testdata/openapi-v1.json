@@ -1030,11 +1030,23 @@
           "lease_days": {
             "type": "integer"
           },
+          "licensed_to": {
+            "items": {
+              "$ref": "#/components/schemas/Licensee"
+            },
+            "type": "array"
+          },
+          "licensed_to_me": {
+            "type": "boolean"
+          },
           "machine_devices": {
             "type": "integer"
           },
           "name": {
             "type": "string"
+          },
+          "named_users": {
+            "type": "boolean"
           },
           "notes": {
             "type": "string"
@@ -1126,7 +1138,10 @@
           "expired",
           "over",
           "full",
-          "documents"
+          "documents",
+          "named_users",
+          "licensed_to_me",
+          "licensed_to"
         ],
         "type": "object"
       },
@@ -1165,6 +1180,15 @@
           "lease_days": {
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "licensed_to": {
+            "items": {
+              "type": "integer"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -1313,6 +1337,25 @@
         "required": [
           "family",
           "styles"
+        ],
+        "type": "object"
+      },
+      "Licensee": {
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
         ],
         "type": "object"
       },
@@ -5309,6 +5352,15 @@
             "x-field-type": "integer"
           },
           {
+            "description": "filter: only entries whose licensed_to_me equals this value (comma-separated: any of them; text ignores case)",
+            "in": "query",
+            "name": "licensed_to_me",
+            "schema": {
+              "type": "string"
+            },
+            "x-field-type": "boolean"
+          },
+          {
             "description": "filter: only entries whose machine_devices equals this value (comma-separated: any of them; text ignores case)",
             "in": "query",
             "name": "machine_devices",
@@ -5325,6 +5377,15 @@
               "type": "string"
             },
             "x-field-type": "string"
+          },
+          {
+            "description": "filter: only entries whose named_users equals this value (comma-separated: any of them; text ignores case)",
+            "in": "query",
+            "name": "named_users",
+            "schema": {
+              "type": "string"
+            },
+            "x-field-type": "boolean"
           },
           {
             "description": "filter: only entries whose notes equals this value (comma-separated: any of them; text ignores case)",

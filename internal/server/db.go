@@ -372,6 +372,16 @@ CREATE TABLE webkit_views (
 );
 ALTER TABLE licenses ADD COLUMN web_pageviews INTEGER NOT NULL DEFAULT 0;
 `,
+	// 25: licenses for named people
+	`
+CREATE TABLE license_users (
+	license_id INTEGER NOT NULL REFERENCES licenses(id) ON DELETE CASCADE,
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (license_id, user_id)
+);
+CREATE INDEX license_users_user ON license_users(user_id);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

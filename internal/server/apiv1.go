@@ -1075,7 +1075,7 @@ type schemaGen struct{ defs map[string]any }
 var typeNames = map[string]string{
 	"fontRow": "Font", "fontDetail": "FontDetail", "uploadResult": "UploadResult", "fontUpdate": "FontVersion",
 	"collectionRow": "Collection", "collectionReq": "CollectionChange", "licenseRow": "License", "licenseReq": "LicenseChange",
-	"licenseDetail": "LicenseDetail", "licenseFamily": "LicenseFamily", "licenseHolder": "SeatHolder", "licenseDoc": "LicenseDocument",
+	"licenseDetail": "LicenseDetail", "licensee": "Licensee", "licenseFamily": "LicenseFamily", "licenseHolder": "SeatHolder", "licenseDoc": "LicenseDocument",
 	"usagePoint": "UsageDay", "fontRequest": "FontRequest", "userRow": "User", "userReq": "UserChange", "groupRow": "Group",
 	"groupReq": "GroupChange", "deviceRow": "Device", "inventoryResult": "Inventory", "inventoryFinding": "InventoryFinding",
 	"inventoryCopy": "InventoryCopy", "usageRow": "FamilyUsage", "auditEntry": "ActivityEntry", "apiErrorBody": "Error", "apiOK": "OK",

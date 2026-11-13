@@ -17,8 +17,9 @@ import (
 
 // Direct downloads, for installing fonts the traditional way (double-click,
 // Font Book, a design app's document fonts folder…). License rules apply:
-// a license can forbid direct downloads, and an enforced license only lets
-// users who hold a seat download, and nobody after it expired.
+// a license can forbid direct downloads or be for named people only, and an
+// enforced license only lets users who hold a seat download, and nobody
+// after it expired.
 
 type dlFont struct {
 	id                        int64
@@ -37,11 +38,13 @@ type dlLicense struct {
 // them into allowed fonts and refusal reasons.
 func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, error) {
 	where, vargs := visibleClause(u)
-	args := append([]any{u.ID}, int64Args(ids)...)
+	args := append([]any{u.ID, u.ID}, int64Args(ids)...)
 	args = append(args, vargs...)
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.full_name, f.license_text, f.license_url, f.extras,
 		l.id, COALESCE(l.name, ''), COALESCE(l.downloadable, 1), COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.expires_on, ''), COALESCE(l.count_admins, 1),
-		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.license_id = l.id AND a.user_id = ?)
+		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.license_id = l.id AND a.user_id = ?),
+		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM license_users lu WHERE lu.license_id = l.id),
+		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM license_users lu WHERE lu.license_id = l.id AND lu.user_id = ?)
 		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE f.id IN (`+placeholders(len(ids))+`) AND `+where+`
 		ORDER BY f.family COLLATE NOCASE, f.italic, f.weight, f.style`, args...)
@@ -58,14 +61,16 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 		var extras, licName, expires string
 		var allowDL, enforce, countAdmins, holder bool
 		var seats int
+		var named, mine bool
 		if err := rows.Scan(&f.id, &f.sha, &f.filename, &f.family, &f.fullName, &f.licText, &f.licURL, &extras,
-			&f.licID, &licName, &allowDL, &enforce, &seats, &expires, &countAdmins, &holder); err != nil {
+			&f.licID, &licName, &allowDL, &enforce, &seats, &expires, &countAdmins, &holder, &named, &mine); err != nil {
 			return nil, nil, err
 		}
 		json.Unmarshal([]byte(extras), &f.extras)
 		// admins are held to the license too, unless it says not to count them
 		if u.Token != nil {
 			holder = false // seats are held by people, not by tokens
+			mine = false   // and a license for named people names people
 		}
 		if f.licID.Valid && !(u.IsAdmin && u.Token == nil && !countAdmins) {
 			l := lics[f.licID.Int64]
@@ -73,6 +78,8 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 				l = &dlLicense{name: licName}
 				expired, _ := expiry(expires, nowT)
 				switch {
+				case named && !mine:
+					l.reason = fmt.Sprintf("the license “%s” is for named people only", licName)
 				case !allowDL:
 					l.reason = fmt.Sprintf("the license “%s” does not allow downloading the font files", licName)
 				case enforce && expired:

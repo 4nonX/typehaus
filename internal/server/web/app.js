@@ -520,13 +520,15 @@ function drawFamilies() {
         ${admin ? `<input type="checkbox" class="selfam" ${allSel ? 'checked' : ''} title="Select family">` : ''}
         ${fam.required === fam.faces.length
           ? `<label class="toggle locked" title="${esc(requiredTitle(fam.faces[0]))}"><input type="checkbox" checked disabled><span></span></label>`
+          : namedOut(lic) && !fam.active ? `<label class="toggle locked" title="${esc(NAMED_TIP)}"><input type="checkbox" disabled><span></span></label>`
           : `<label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>`}
         <span class="name">${esc(fam.name)}</span>
         <span class="meta">${plural(fam.faces.length, 'style')}${fam.required ? ` · <span class="badge inst" title="${esc(requiredTitle(fam.faces.find((f) => f.required)))}">installed by ${esc(fam.faces.find((f) => f.required).required_by.join(', '))}</span>` : ''}${fam.active > fam.required ? ` · <span class="badge on">${fam.active - fam.required} active</span>` : ''}${lic ? ` · ${licenseBadge(lic)}` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand info" title="Details and license">Info</button>
-        ${S.me.downloads ? `<button class="expand dl" title="Download ${fam.faces.length > 1 ? 'all styles as ZIP' : 'the font file'} to install it yourself">Download</button>` : ''}
+        ${namedOut(lic) ? `<button class="expand" data-askfont="${esc(fam.name)}" title="${esc(NAMED_TIP)}">Request</button>`
+          : S.me.downloads ? `<button class="expand dl" title="Download ${fam.faces.length > 1 ? 'all styles as ZIP' : 'the font file'} to install it yourself">Download</button>` : ''}
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
       </div>
       <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(fam.name)}" style="font-size:${L.size}pt">${esc(L.preview || fam.name)}</div>
@@ -538,6 +540,7 @@ function drawFamilies() {
           ${S.me.downloads ? `<button class="iconbtn dlface" title="Download ${esc(f.style)}" aria-label="Download ${esc(f.full_name)}">↓</button>` : '<span></span>'}
           ${f.required
             ? `<label class="toggle locked" title="${esc(requiredTitle(f))}"><input type="checkbox" checked disabled><span></span></label>`
+            : namedOut(lic) && !f.activated ? `<label class="toggle locked" title="${esc(NAMED_TIP)}"><input type="checkbox" disabled><span></span></label>`
             : `<label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>`}
         </div>`).join('')}</div>` : ''}
     </div>`;
@@ -597,6 +600,7 @@ function drawFamilyGrid(box, fams, visibleFams) {
         <span class="meta">${plural(fam.faces.length, 'style')}${lic && lic.kind !== 'open' ? ` · ${esc(lic.name)}` : ''}</span>
         <span class="spacer"></span>
         ${locked ? `<label class="toggle locked" title="${esc(requiredTitle(fam.faces[0]))}"><input type="checkbox" checked disabled><span></span></label>`
+          : namedOut(lic) && !fam.active ? `<button class="btn sm" data-askfont="${esc(fam.name)}" title="${esc(NAMED_TIP)}">Request</button>`
           : `<label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>`}
       </div>
     </div>`;
@@ -1389,11 +1393,21 @@ function seatText(l) {
   return `${l.used} of ${plural(l.seats, unit + ' seat')} in use`;
 }
 
+// a license for named people that doesn't name the signed-in person
+const namedOut = (l) => !!l && l.named_users && !l.licensed_to_me && !(S.me.is_admin && !l.count_admins);
+const NAMED_TIP = 'The license for this font names the people who may use it, and you are not one of them. Request it to ask an administrator.';
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-askfont]');
+  if (b) requestFont(`${b.dataset.askfont} (licensed to named people)`);
+});
+
 // badge shown next to a family in the library
 function licenseBadge(l) {
   const tip = esc(`${l.name}${l.vendor ? ' · ' + l.vendor : ''}`);
+  if (namedOut(l)) return `<span class="badge warn" title="${esc(NAMED_TIP)}">licensed to named people</span>`;
   if (l.expired) return `<span class="badge warn" title="${tip}">license expired${l.enforce ? ' – not installed' : ''}</span>`;
   if (l.enforce && l.full && !l.holder) return `<span class="badge warn" title="${tip}: all seats are in use">no free seat</span>`;
+  if (l.named_users && l.licensed_to_me) return `<span class="badge" title="${tip}: licensed to you by name">${esc(l.name)} · licensed to you</span>`;
   if (S.me.is_admin && l.over) return `<span class="badge warn" title="${tip}: more ${l.seat_unit} than seats">${esc(l.name)} · over seats</span>`;
   return `<span class="badge ${l.kind === 'open' ? 'open' : ''}" title="${tip}">${esc(l.name)}</span>`;
 }
@@ -1545,7 +1559,8 @@ async function renderLicenses(page) {
     ${lics.length ? `<table class="t lics"><thead><tr><th>License</th><th>Seats</th><th>Term</th><th class="num">Docs</th><th class="num">Families</th><th></th></tr></thead><tbody>
       ${lics.map((l) => `<tr>
         <td><a href="#" class="lname" data-open="${l.id}">${esc(l.name)}</a> ${l.kind === 'open' ? '<span class="badge open">open source</span>' : ''} ${statusBadges(l)}
-          <div class="small muted">${[l.vendor, rightsSummary(l)].filter(Boolean).map(esc).join(' · ')}</div></td>
+          <div class="small muted">${[l.vendor, rightsSummary(l)].filter(Boolean).map(esc).join(' · ')}</div>
+          ${l.named_users && l.licensed_to.length ? `<div class="small" title="Only these people may use the fonts">Licensed to ${l.licensed_to.map((p) => esc(p.display_name || p.username)).join(', ')}</div>` : ''}</td>
         <td class="nowrap">${meter(l)} <span class="small muted">${l.seat_unit}</span>
           <div class="small ${l.peak_over ? 'warnt' : 'muted'}">peak 12 mo: ${l.seat_unit === 'devices' ? l.peak_devices : l.peak_users}</div></td>
         <td class="small">${termText(l)}</td>
@@ -1695,6 +1710,30 @@ document.addEventListener('click', (e) => {
   b.textContent = box.classList.toggle('clamp') ? 'Show all' : 'Show less';
 });
 
+// peoplePicker: chosen people as chips, a search field to add more.
+function peoplePicker(box, users, selected) {
+  const label = (u) => u.display_name ? `${u.display_name} (${u.username})` : u.username;
+  const chosen = new Set(selected);
+  const byLabel = new Map(users.map((u) => [label(u).toLowerCase(), u]));
+  const listID = 'pp-' + Math.random().toString(36).slice(2);
+  const draw = () => {
+    const sel = users.filter((u) => chosen.has(u.id));
+    box.innerHTML = `<div class="chips">${sel.map((u) => `<span class="chip on">${esc(label(u))}<button type="button" class="chip-x" data-rm="${u.id}" aria-label="Remove ${esc(label(u))}">×</button></span>`).join('')}
+      <input type="text" class="pp-add" list="${listID}" placeholder="${sel.length ? 'Add someone…' : 'Everyone who can see the fonts – type a name to limit it'}" autocomplete="off"></div>
+      <datalist id="${listID}">${users.filter((u) => !chosen.has(u.id) && !u.disabled).map((u) => `<option value="${esc(label(u))}">`).join('')}</datalist>`;
+    $$('[data-rm]', box).forEach((b) => b.onclick = () => { chosen.delete(+b.dataset.rm); draw(); box.dispatchEvent(new Event('input', { bubbles: true })); $('.pp-add', box).focus(); });
+    const inp = $('.pp-add', box);
+    const take = () => {
+      const u = byLabel.get(inp.value.trim().toLowerCase()) || users.find((x) => x.username.toLowerCase() === inp.value.trim().toLowerCase());
+      if (u) { chosen.add(u.id); draw(); box.dispatchEvent(new Event('input', { bubbles: true })); $('.pp-add', box).focus(); }
+    };
+    inp.addEventListener('input', () => { if (byLabel.has(inp.value.trim().toLowerCase())) take(); });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); take(); } });
+  };
+  draw();
+  return { ids: () => [...chosen] };
+}
+
 function editLicense(l, done) {
   const rights = l ? l.rights : ['desktop'];
   const d = dialog(l ? 'Edit license' : 'New license', `
@@ -1710,6 +1749,9 @@ function editLicense(l, done) {
       <label class="field">Seats (0 = unlimited)<input type="number" name="seats" min="0" value="${l?.seats ?? 0}"></label>
       <label class="field">Counted per<select name="seat_unit"><option value="users">User (anyone with a style active)</option><option value="devices" ${l?.seat_unit === 'devices' ? 'selected' : ''}>Device (computers with it installed)</option></select></label>
     </div>
+    <div class="field"><span>Licensed to <span class="muted">(optional – named people)</span></span>
+      <div id="lic-people" class="people-pick"><span class="small muted">Loading people…</span></div>
+      <p class="small muted hint" style="margin:6px 0 0">Only these people may switch the fonts on, download them or have them installed by a collection; everyone else sees the fonts locked and can request them. Leave empty for a license that covers everyone who can see the fonts.</p></div>
     <div class="two">
       <label class="field">Purchased<input type="date" name="purchased_on" value="${esc(l?.purchased_on)}"></label>
       <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
@@ -1747,6 +1789,7 @@ function editLicense(l, done) {
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
         reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),
       };
+      if (people) body.licensed_to = people.ids();
       if (l) await api('PATCH', `/api/licenses/${l.id}`, body);
       else {
         const r = await api('POST', '/api/licenses', body);
@@ -1760,6 +1803,10 @@ function editLicense(l, done) {
       done();
     },
   });
+  let people = null;
+  api('GET', '/api/users').then((users) => {
+    people = peoplePicker($('#lic-people', d), users, (l?.licensed_to || []).map((p) => p.id));
+  }).catch(() => { $('#lic-people', d).innerHTML = '<span class="small warnt">Couldn\'t load the people list.</span>'; });
   if (l) wireDocs($('#docbox', d), l, done);
   // new licenses: open-source fonts may be downloaded, commercial ones not
   // unless the EULA allows it
@@ -1940,6 +1987,8 @@ async function licenseDetail(id, done) {
     ${usageChart(hist, l)}
     <h4>Fonts <span class="muted small">${plural(r.families.length, 'family', 'families')}</span></h4>
     <p class="small">${r.families.map((f) => `${esc(f.family)} <span class="muted">(${f.styles})</span>`).join(', ') || '<span class="muted">None assigned – select fonts in the Library and choose “Assign license”.</span>'}</p>
+    ${l.named_users && l.licensed_to.length ? `<h4>Licensed to <span class="muted small">only these people may use the fonts</span></h4>
+    <p class="small">${l.licensed_to.map((p) => esc(p.display_name ? `${p.display_name} (${p.username})` : p.username)).join(', ')}</p>` : ''}
     <h4>${l.seat_unit === 'devices' ? 'Devices' : 'People'} holding a seat <span class="muted small">${seatText(l)}</span></h4>
     <p class="small">${(r.holders || []).map((h) => `${esc(h.name)}${h.extra ? ` <span class="muted">(${esc(h.extra)})</span>` : ''}`).join(', ') || '<span class="muted">Nobody yet.</span>'}</p>`,
   { submit: 'Close', cancel: false, wide: true, onSubmit: async () => {} });

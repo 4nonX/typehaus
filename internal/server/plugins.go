@@ -82,11 +82,11 @@ func (s *Server) handlePluginResolve(w http.ResponseWriter, r *http.Request, d *
 				st.Status, st.Reason = "unsupported", "this font format can't be installed on "+platformName(d.Platform)
 			case !agentSupportsKind(d.Agent, kind):
 				st.Status, st.Reason = "unsupported", "update the typehaus app to install this font format"
-			case active:
-				st.Status = "active"
 			default:
 				if blocked, why := s.activationRefusals(u.ID, []int64{id}); blocked[id] {
 					st.Status, st.Reason = "refused", strings.Join(why, "; ")
+				} else if active {
+					st.Status = "active"
 				} else {
 					st.Status = "available"
 				}
