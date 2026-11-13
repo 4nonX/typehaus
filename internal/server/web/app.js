@@ -68,6 +68,7 @@ const ROUTES = {
   collections: { title: 'Collections', render: renderCollections, admin: true },
   people: { title: 'People', render: renderPeople, admin: true },
   licenses: { title: 'Licenses', render: renderLicenses, admin: true },
+  requests: { title: 'Requests', render: renderRequests, admin: true },
   activity: { title: 'Activity', render: renderActivity, admin: true },
 };
 
@@ -109,6 +110,7 @@ function render() {
   $('#acct').onclick = accountDialog;
   document.title = `${def.title} · typehaus`;
   updateNavDot();
+  updateRequestsCount();
   def.render($('#page')).catch?.(fail);
 }
 
@@ -230,8 +232,11 @@ const previewObserver = new IntersectionObserver((entries) => {
 // ---------------------------------------------------------------------------
 async function loadLibrary() {
   const L = S.lib;
-  const [fonts, colls, lics] = await Promise.all([api('GET', '/api/fonts'), api('GET', '/api/collections'), api('GET', '/api/licenses')]);
+  const [fonts, colls, lics, reqs] = await Promise.all([api('GET', '/api/fonts'), api('GET', '/api/collections'), api('GET', '/api/licenses'),
+    api('GET', S.me.is_admin ? '/api/requests' : '/api/requests?mine=1')]);
   L.fonts = fonts; L.collections = colls; L.licenses = lics || []; L.loaded = true;
+  L.requests = reqs || [];
+  updateRequestsCount();
   updateNavDot();
   const ids = new Set(fonts.map((f) => f.id));
   for (const id of [...L.selected]) if (!ids.has(id)) L.selected.delete(id);
@@ -285,6 +290,8 @@ async function renderLibrary(page) {
         <h4>Collections</h4>
         ${L.collections.map((c) => `<a href="#" data-coll="${c.id}" class="${String(L.coll) === String(c.id) ? 'active' : ''}">${esc(c.name)} <span class="n">${c.font_count}</span></a>`).join('') || '<p class="muted small" style="padding:0 10px">None yet</p>'}
         ${isAdmin ? '<p style="padding:0 10px"><a href="#/collections" class="small" style="padding:0">Manage collections →</a></p>' : ''}
+        <h4>Missing a font?</h4>
+        <a href="#" id="reqfont">Request a font${myAnswers().length ? ` <span class="n"><span class="badge on">${myAnswers().length} new answer${myAnswers().length > 1 ? 's' : ''}</span></span>` : ''}</a>
       </aside>
       <section>
         ${isAdmin ? `<div class="drop" id="drop">
@@ -302,6 +309,7 @@ async function renderLibrary(page) {
       </section>
     </div>`;
 
+  $('#reqfont', page).onclick = (e) => { e.preventDefault(); requestFont(); };
   $$('.side a[data-coll]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); L.coll = a.dataset.coll; L.selected.clear(); L.shown = 0; renderLibrary(page); });
   const q = $('#q', page);
   q.oninput = () => { L.q = q.value; L.shown = 0; drawFamilies(); };
@@ -405,6 +413,85 @@ function drawFamilies() {
   });
   $$('.specimen', box).forEach((el) => previewObserver.observe(el));
   drawBulk();
+}
+
+// ---------------------------------------------------------------------------
+// font requests
+// ---------------------------------------------------------------------------
+const myRequests = () => (S.lib.requests || []).filter((r) => r.user_id === S.me.id);
+const myAnswers = () => myRequests().filter((r) => r.status !== 'open' && !r.seen);
+const REQ_STATUS = { open: '<span class="badge">waiting</span>', done: '<span class="badge open">done</span>', declined: '<span class="badge warn">declined</span>' };
+
+function updateRequestsCount() {
+  const a = $('nav.main a[href="#/requests"]');
+  if (!a) return;
+  const n = (S.lib.requests || []).filter((r) => r.status === 'open').length;
+  let c = $('.count', a);
+  if (!n) { c?.remove(); return; }
+  if (!c) { a.insertAdjacentHTML('beforeend', ' <span class="count"></span>'); c = $('.count', a); }
+  c.textContent = n;
+}
+
+function requestFont() {
+  const mine = myRequests();
+  const d = dialog('Request a font', `
+    <p class="small muted" style="margin:0">Tell your administrators which font you need. They decide whether to add it – depending on its license – and you'll see the answer here.</p>
+    <label class="field">Font<input type="text" name="font" required maxlength="200" placeholder="e.g. Brandon Grotesque Medium"></label>
+    <label class="field">What for? <span class="muted">(optional)</span><textarea name="purpose" rows="2" maxlength="2000" placeholder="Project, client, or a link to the font"></textarea></label>
+    ${mine.length ? `<h4>Your requests</h4><div class="reqs">${mine.map((r) => `<div class="req ${r.status !== 'open' && !r.seen ? 'new' : ''}">
+      <div><b>${esc(r.font)}</b> ${REQ_STATUS[r.status] || ''} <span class="small muted">${ago(r.resolved_at || r.created_at)}</span></div>
+      ${r.answer ? `<div class="small">${esc(r.answer)}${r.resolved_by ? ` <span class="muted">– ${esc(r.resolved_by)}</span>` : ''}</div>` : ''}
+      ${r.status === 'open' ? `<button type="button" class="btn sm ghost" data-withdraw="${r.id}">Withdraw</button>` : ''}</div>`).join('')}</div>` : ''}`,
+  {
+    submit: 'Send request',
+    onSubmit: async (fd) => {
+      await api('POST', '/api/requests', { font: fd.get('font'), purpose: fd.get('purpose') });
+      toast('Request sent');
+      S.lib.loaded = false;
+      if (route() === 'library') renderLibrary($('#page'));
+    },
+  });
+  $$('[data-withdraw]', d).forEach((b) => b.onclick = async () => {
+    try { await api('DELETE', `/api/requests/${b.dataset.withdraw}`); b.closest('.req').remove(); toast('Request withdrawn'); S.lib.loaded = false; } catch (e) { fail(e); }
+  });
+  // answers are now seen
+  const fresh = myAnswers();
+  if (fresh.length) {
+    Promise.all(fresh.map((r) => api('PATCH', `/api/requests/${r.id}`, { seen: true }).catch(() => {}))).then(() => { fresh.forEach((r) => { r.seen = true; }); });
+  }
+}
+
+async function renderRequests(page) {
+  const reqs = await api('GET', '/api/requests');
+  S.lib.requests = reqs;
+  updateRequestsCount();
+  const open = reqs.filter((r) => r.status === 'open');
+  const done = reqs.filter((r) => r.status !== 'open');
+  const row = (r) => `<tr><td><b>${esc(r.font)}</b>${r.purpose ? `<div class="small muted pre">${esc(r.purpose)}</div>` : ''}</td>
+    <td>${esc(r.user)}</td><td class="small">${ago(r.created_at)}</td>
+    ${r.status === 'open'
+      ? `<td style="text-align:right;white-space:nowrap"><button class="btn sm" data-answer="${r.id}" data-st="done">Done…</button> <button class="btn sm" data-answer="${r.id}" data-st="declined">Decline…</button></td>`
+      : `<td>${REQ_STATUS[r.status]}${r.answer ? `<div class="small">${esc(r.answer)}</div>` : ''}<div class="small muted">${esc(r.resolved_by)} · ${ago(r.resolved_at)}</div></td>`}</tr>`;
+  page.innerHTML = `
+    <div class="row"><div><h1>Requests</h1><p class="sub">Fonts people asked for. Add the font, record its license and put it in a collection – then mark the request done so they know.</p></div></div>
+    ${open.length ? `<table class="t"><thead><tr><th>Font</th><th>Requested by</th><th>When</th><th></th></tr></thead><tbody>${open.map(row).join('')}</tbody></table>`
+      : '<div class="empty"><div class="big">No open requests.</div>People can request fonts from the library.</div>'}
+    ${done.length ? `<h2>Answered</h2><table class="t"><thead><tr><th>Font</th><th>Requested by</th><th>When</th><th>Answer</th></tr></thead><tbody>${done.map(row).join('')}</tbody></table>` : ''}`;
+  $$('[data-answer]', page).forEach((b) => b.onclick = () => {
+    const r = reqs.find((x) => x.id === +b.dataset.answer);
+    const st = b.dataset.st;
+    dialog(st === 'done' ? `Done: ${r.font}` : `Decline: ${r.font}`, `
+      <label class="field">Message to ${esc(r.user)} <span class="muted">(optional)</span>
+        <textarea name="answer" rows="3" maxlength="2000" placeholder="${st === 'done' ? 'e.g. Added to the Brand collection – switch it on in the library.' : 'e.g. No license for web use – please use Inter instead.'}"></textarea></label>`,
+    {
+      submit: st === 'done' ? 'Mark as done' : 'Decline',
+      onSubmit: async (fd) => {
+        await api('PATCH', `/api/requests/${r.id}`, { status: st, answer: fd.get('answer') });
+        toast(st === 'done' ? 'Marked as done' : 'Declined');
+        renderRequests(page);
+      },
+    });
+  });
 }
 
 // on: switched on by the user, or installed by the organisation

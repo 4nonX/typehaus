@@ -188,6 +188,22 @@ CREATE VIEW user_fonts AS
 	UNION
 	SELECT user_id, font_id FROM required_fonts;
 `,
+	// 7: requests for fonts that aren't in the library yet
+	`
+CREATE TABLE font_requests (
+	id          INTEGER PRIMARY KEY,
+	user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	font        TEXT NOT NULL,
+	purpose     TEXT NOT NULL DEFAULT '',
+	status      TEXT NOT NULL DEFAULT 'open',
+	answer      TEXT NOT NULL DEFAULT '',
+	seen        INTEGER NOT NULL DEFAULT 1,
+	created_at  INTEGER NOT NULL,
+	resolved_at INTEGER,
+	resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX font_requests_status ON font_requests(status);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

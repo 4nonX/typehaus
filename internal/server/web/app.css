@@ -260,3 +260,10 @@ details.otherdl ul { margin: 6px 0; padding-left: 18px; line-height: 1.8; }
 .impact.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); }
 .impact.bad { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .impact table { margin: 0; }
+
+/* ---- font requests ---- */
+nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; text-align: center; margin-left: 2px; }
+.reqs { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.req { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; justify-items: start; }
+.req.new { border-color: var(--accent); }
+.pre { white-space: pre-wrap; }

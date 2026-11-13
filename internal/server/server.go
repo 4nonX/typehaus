@@ -247,6 +247,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/enroll-codes", s.user(s.handleCreateEnrollCode))
 
 	// admin
+	mux.Handle("GET /api/requests", s.user(s.handleListRequests))
+	mux.Handle("POST /api/requests", s.user(s.handleCreateRequest))
+	mux.Handle("PATCH /api/requests/{id}", s.user(s.handleUpdateRequest))
+	mux.Handle("DELETE /api/requests/{id}", s.user(s.handleDeleteRequest))
 	mux.Handle("GET /api/users", s.admin(s.handleListUsers))
 	mux.Handle("POST /api/users", s.admin(s.handleCreateUser))
 	mux.Handle("PATCH /api/users/{id}", s.admin(s.handleUpdateUser))
