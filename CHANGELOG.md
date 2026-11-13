@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Fixed
+- License notes and the license text read from font files lost their structure: wrapped lines of indented items fell back to the left edge, so pasted EULAs no longer showed which clause belongs where, and a full EULA filled the whole license card. Each line now keeps its indentation, paragraphs stay apart, and long texts start collapsed with *Show all*.
+
 ## [0.5.0] - 2026-11-13
 
 ### Added
