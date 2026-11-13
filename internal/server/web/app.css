@@ -388,3 +388,13 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 /* integrations: services */
 .svc { display: grid; gap: 8px; align-content: start; }
 .svc p { margin: 0; }
+
+/* integrations: webhooks, web fonts */
+.evlist { max-height: 260px; }
+.hookhelp { margin-top: 18px; }
+.kit { margin-top: 16px; display: grid; gap: 10px; }
+.kit details ul { margin: 6px 0 0; padding-left: 18px; }
+.embed { display: grid; gap: 6px; }
+.embed .tokbox code { font-size: 12.5px; overflow-wrap: anywhere; }
+.kitfonts { max-height: 300px; }
+.kfilter { margin-bottom: 8px; width: 100%; }

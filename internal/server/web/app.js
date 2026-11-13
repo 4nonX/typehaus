@@ -1278,7 +1278,7 @@ const RIGHTS = {
 
 function licenseAttention() {
   if (!S.me?.is_admin) return [];
-  return S.lib.licenses.filter((l) => l.expired || l.over || sharedInstalls(l) || (l.expires_in_days != null && l.expires_in_days <= 30));
+  return S.lib.licenses.filter((l) => l.expired || l.over || l.web_over || sharedInstalls(l) || (l.expires_in_days != null && l.expires_in_days <= 30));
 }
 
 // the warning dot on the Licenses tab
@@ -1320,6 +1320,7 @@ function statusBadges(l) {
   if (sharedInstalls(l)) b.push(`<span class="badge warn" title="Installed for all users on ${plural(l.machine_devices, 'computer')} – who uses it there can't be counted per person">all-users installs</span>`);
   if (l.expired) b.push('<span class="badge danger">expired</span>');
   else if (l.expires_in_days != null && l.expires_in_days <= 30) b.push(`<span class="badge warn">expires in ${plural(l.expires_in_days, 'day')}</span>`);
+  if (l.web_over) b.push('<span class="badge danger" title="Websites using these fonts went over the monthly page views">over web page views</span>');
   if (l.over) b.push('<span class="badge danger">over seats</span>');
   else if (l.peak_over) b.push('<span class="badge warn" title="More in use than seats at some point in the last 12 months">over seats in the last year</span>');
   else if (l.full) b.push('<span class="badge warn">all seats in use</span>');
@@ -1340,6 +1341,7 @@ function licenseCard(l) {
     <dl class="kv2">
       <dt>Allowed use</dt><dd>${l.rights.length ? `<div class="chips">${l.rights.map((r) => `<span class="chip">${esc(RIGHTS[r] || r)}</span>`).join('')}</div>` : '<span class="muted">Not recorded – check the license terms</span>'}</dd>
       <dt>Download</dt><dd>${l.downloadable ? 'Font files may be downloaded directly' : 'Only through the typehaus app – no direct download'}</dd>
+      ${l.web_pageviews || l.web_views ? `<dt>Web page views</dt><dd>${l.web_views.toLocaleString()} this month${l.web_pageviews ? ` of ${l.web_pageviews.toLocaleString()}` : ''}${l.web_over ? ' <span class="badge danger">over</span>' : ''}</dd>` : ''}
       ${l.lease_days ? `<dt>Offline use</dt><dd>Up to ${plural(l.lease_days, 'day')} without contact to the server, then the fonts pause until the computer is back online</dd>` : ''}
       <dt>Seats</dt><dd>${seatText(l)}${l.holder ? ' <span class="muted small">· you hold one</span>' : ''}</dd>
       <dt>Term</dt><dd>${termText(l)}${l.purchased_on ? ` <span class="muted small">· purchased ${esc(l.purchased_on)}</span>` : ''}</dd>
@@ -1627,6 +1629,10 @@ function editLicense(l, done) {
       <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
     </div>
     <div class="two">
+      <label class="field">Web page views per month (0 = no limit)<input type="number" name="web_pageviews" min="0" step="1000" value="${l?.web_pageviews ?? 0}"></label>
+      <p class="small muted hint">For web font licenses priced by traffic: page views of websites using these fonts through a web kit (Integrations → Web fonts) count against this. Going over doesn't break sites – typehaus flags it.</p>
+    </div>
+    <div class="two">
       <label class="field">Offline use (days, 0 = no limit)<input type="number" name="lease_days" min="0" max="365" value="${l?.lease_days ?? 0}"></label>
       <p class="small muted hint">For licenses that allow use only while connected: after this many days without reaching the server, a computer removes these fonts. They return automatically once it is back online.</p>
     </div>
@@ -1649,7 +1655,7 @@ function editLicense(l, done) {
     onSubmit: async (fd) => {
       const body = {
         name: fd.get('name'), kind: fd.get('kind'),
-        vendor: fd.get('vendor'), rights: fd.getAll('rights'), lease_days: +fd.get('lease_days') || 0,
+        vendor: fd.get('vendor'), rights: fd.getAll('rights'), lease_days: +fd.get('lease_days') || 0, web_pageviews: +fd.get('web_pageviews') || 0,
         seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on', downloadable: fd.get('downloadable') === 'on',
         count_admins: fd.get('count_admins') === 'on',
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
@@ -1858,7 +1864,7 @@ async function licenseDetail(id, done) {
 // ---------------------------------------------------------------------------
 // API tokens (admin)
 // ---------------------------------------------------------------------------
-const INTEGRATION_TABS = { tokens: 'API tokens', services: 'Services' };
+const INTEGRATION_TABS = { tokens: 'API tokens', webhooks: 'Webhooks', webfonts: 'Web fonts', services: 'Services' };
 async function renderIntegrations(page) {
   let tab = new URLSearchParams(location.hash.split('?')[1] || '').get('tab');
   if (!INTEGRATION_TABS[tab]) tab = 'tokens';
@@ -1869,7 +1875,175 @@ async function renderIntegrations(page) {
   $$('.tabs button', page).forEach((b) => b.onclick = () => { location.hash = `#/integrations?tab=${b.dataset.tab}`; });
   const box = $('#intbox', page);
   if (tab === 'services') await renderServices(box);
+  else if (tab === 'webhooks') await renderWebhooks(box);
+  else if (tab === 'webfonts') await renderWebfonts(box);
   else await renderAPI(box);
+}
+
+// ---- webhooks ----------------------------------------------------------------
+const HOOK_STATUS = { delivered: '<span class="badge open">delivered</span>', failed: '<span class="badge danger">failed</span>', pending: '<span class="badge">pending</span>' };
+async function renderWebhooks(box) {
+  const [hooks, events] = await Promise.all([api('GET', '/api/webhooks'), api('GET', '/api/webhook-events')]);
+  const refresh = () => renderWebhooks(box).catch(fail);
+  box.innerHTML = `<div class="row"><p class="sub" style="margin:0">typehaus sends a signed POST to your URL when something happens – a font is added, a license expires, someone requests a font.
+      Failed deliveries are retried for about a day.</p><span class="spacer"></span><button class="btn primary" id="newhook">New webhook</button></div>
+    ${hooks.length ? `<table class="t" style="margin-top:16px"><thead><tr><th>Name</th><th>Events</th><th>Last delivery</th><th></th></tr></thead><tbody>
+      ${hooks.map((h) => `<tr><td><b>${esc(h.name)}</b>${h.active ? '' : ' <span class="badge">paused</span>'}<div class="small muted mono">${esc(h.url)}</div></td>
+        <td class="small">${h.events.includes('*') ? 'All events' : h.events.map(esc).join(', ')}</td>
+        <td class="small">${h.last_status ? `${HOOK_STATUS[h.last_status] || esc(h.last_status)} ${h.last_at ? ago(h.last_at) : ''}` : '<span class="muted">none yet</span>'}
+          ${h.failed_recent ? `<div class="warnt">${plural(h.failed_recent, 'failure')} in 7 days</div>` : ''}</td>
+        <td style="text-align:right" class="nowrap"><button class="btn sm" data-test="${h.id}">Send test</button> <button class="btn sm" data-log="${h.id}">Deliveries</button>
+          <button class="btn sm" data-edit="${h.id}">Edit</button></td></tr>`).join('')}</tbody></table>`
+    : '<div class="empty"><div class="big">No webhooks yet.</div>Connect a chat, a ticket system or your own service to typehaus events.</div>'}
+    <details class="hookhelp"><summary>Verifying deliveries</summary>
+      <p class="small">Each delivery carries <code>X-Typehaus-Event</code>, <code>X-Typehaus-Delivery</code>, <code>X-Typehaus-Timestamp</code> and
+      <code>X-Typehaus-Signature: v1=&lt;hex&gt;</code> – the HMAC-SHA256 of <code>&lt;timestamp&gt;.&lt;body&gt;</code> with the webhook's secret.
+      Reject a delivery if the signature doesn't match or the timestamp is older than five minutes. Answer with 2xx within 10 seconds.</p></details>`;
+  const form = (h) => `
+    <label class="field">Name<input type="text" name="name" required maxlength="100" value="${esc(h?.name)}" placeholder="e.g. Design team chat"></label>
+    <label class="field">URL<input type="url" name="url" required placeholder="https://" value="${esc(h?.url)}"></label>
+    <fieldset class="field"><legend>Events</legend>
+      <label class="check"><input type="checkbox" name="all" ${!h || h.events.includes('*') ? 'checked' : ''}><span><b>All events</b>, including ones added in later versions</span></label>
+      <div class="checks evlist">${events.map((e) => `<label class="check"><input type="checkbox" name="ev" value="${esc(e.type)}" ${h && h.events.includes(e.type) ? 'checked' : ''}>
+        <span><span class="mono">${esc(e.type)}</span> <span class="small muted">${esc(e.description)}</span></span></label>`).join('')}</div></fieldset>
+    ${h ? `<label class="check"><input type="checkbox" name="active" ${h.active ? 'checked' : ''}><span><b>Active</b> – paused webhooks get no deliveries</span></label>` : ''}`;
+  const wireForm = (d) => {
+    const all = $('[name=all]', d);
+    const sync = () => $$('[name=ev]', d).forEach((c) => { c.disabled = all.checked; });
+    all.onchange = sync; sync();
+  };
+  const body = (fd) => ({ name: fd.get('name'), url: fd.get('url'), events: fd.get('all') ? ['*'] : fd.getAll('ev') });
+  $('#newhook', box).onclick = () => {
+    const d = dialog('New webhook', form(null), { submit: 'Create webhook', wide: true, onSubmit: async (fd) => {
+      const b = body(fd);
+      if (!b.events.length) throw new Error('Choose at least one event');
+      const r = await api('POST', '/api/webhooks', b);
+      refresh();
+      showSecret(fd.get('name'), r.secret);
+    } });
+    wireForm(d);
+  };
+  $$('[data-edit]', box).forEach((btn) => btn.onclick = () => {
+    const h = hooks.find((x) => x.id === +btn.dataset.edit);
+    const d = dialog(`Webhook “${h.name}”`, form(h), { wide: true,
+      extra: { label: 'Delete', danger: true, onClick: () => confirmDialog('Delete webhook', `Delete <b>${esc(h.name)}</b>? Pending deliveries are dropped.`,
+        async () => { await api('DELETE', `/api/webhooks/${h.id}`); toast('Webhook deleted'); refresh(); }) },
+      onSubmit: async (fd) => {
+        const b = body(fd);
+        if (!b.events.length) throw new Error('Choose at least one event');
+        await api('PATCH', `/api/webhooks/${h.id}`, { ...b, active: fd.get('active') === 'on' });
+        toast('Webhook saved'); refresh();
+      } });
+    wireForm(d);
+    const row = document.createElement('p');
+    row.className = 'small';
+    row.innerHTML = '<button type="button" class="linkbtn">Create a new signing secret…</button> The old one stops working at once.';
+    $('form', d)?.insertBefore(row, $('form .actions', d) || null);
+    row.querySelector('button').onclick = () => confirmDialog('New signing secret', 'The receiver must switch to the new secret – deliveries signed with it fail verification until then.', async () => {
+      const r = await api('POST', `/api/webhooks/${h.id}/secret`);
+      showSecret(h.name, r.secret);
+    }, 'Create new secret');
+  });
+  $$('[data-test]', box).forEach((btn) => btn.onclick = async () => {
+    try { await api('POST', `/api/webhooks/${btn.dataset.test}/test`); toast('Test event sent'); setTimeout(refresh, 1500); } catch (e) { fail(e); }
+  });
+  $$('[data-log]', box).forEach((btn) => btn.onclick = () => hookLog(hooks.find((x) => x.id === +btn.dataset.log), refresh));
+}
+
+function showSecret(name, secret) {
+  const d = dialog(`Signing secret for “${name}”`, `
+    <p>Copy the secret now – typehaus shows it only once. Your receiver uses it to check the <code>X-Typehaus-Signature</code> header.</p>
+    <div class="tokbox"><code id="tokval">${esc(secret)}</code><button type="button" class="btn sm" id="tokcopy">Copy</button></div>`,
+  { submit: 'Done', cancel: false, onSubmit: async () => {} });
+  $('#tokcopy', d).onclick = () => navigator.clipboard.writeText(secret).then(() => toast('Secret copied'), () => toast('Press Ctrl+C to copy'));
+}
+
+async function hookLog(h, done) {
+  const rows = await api('GET', `/api/webhooks/${h.id}/deliveries?limit=50`);
+  const d = dialog(`Deliveries – ${h.name}`, rows.length ? `<table class="t"><thead><tr><th>When</th><th>Event</th><th>Result</th><th></th></tr></thead><tbody>
+    ${rows.map((x) => `<tr><td class="small" title="${fmtDate(x.created_at)}">${ago(x.created_at)}</td><td class="mono">${esc(x.event)}</td>
+      <td class="small">${HOOK_STATUS[x.status] || esc(x.status)} ${x.last_code ? `HTTP ${x.last_code}` : ''} ${x.attempts > 1 ? `· ${x.attempts} attempts` : ''}
+        ${x.last_error ? `<div class="muted">${esc(x.last_error)}</div>` : ''}${x.status === 'pending' && x.next_at ? `<div class="muted">next try ${new Date(x.next_at * 1000).toLocaleTimeString()}</div>` : ''}</td>
+      <td style="text-align:right">${x.status === 'failed' || x.status === 'delivered' ? `<button type="button" class="btn sm" data-redo="${x.id}">Send again</button>` : ''}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="muted">No deliveries in the last 30 days.</p>', { submit: 'Close', cancel: false, wide: true, onSubmit: async () => done() });
+  $$('[data-redo]', d).forEach((b) => b.onclick = async () => {
+    try { await api('POST', `/api/webhooks/${h.id}/deliveries/${b.dataset.redo}/redeliver`); b.replaceWith(Object.assign(document.createElement('span'), { className: 'badge', textContent: 'queued' })); } catch (e) { fail(e); }
+  });
+}
+
+// ---- web fonts ---------------------------------------------------------------
+async function renderWebfonts(box) {
+  if (!S.lib.loaded) await loadLibrary();
+  const kits = await api('GET', '/api/webkits');
+  const refresh = () => renderWebfonts(box).catch(fail);
+  box.innerHTML = `<div class="row"><p class="sub" style="margin:0">Serve library fonts to your websites. A web kit is one stylesheet a site links to; typehaus serves only fonts whose license
+      includes web use, only to the domains you list, and counts page views against the licenses.</p><span class="spacer"></span><button class="btn primary" id="newkit">New web kit</button></div>
+    ${kits.length ? kits.map((k) => {
+      const ok = k.fonts.filter((f) => f.served);
+      const out = k.fonts.filter((f) => !f.served);
+      const fams = [...new Set(ok.map((f) => f.family))];
+      const tag = `<link rel="stylesheet" href="${k.css_url}">`;
+      return `<div class="card kit">
+        <div class="row"><h3 style="margin:0">${esc(k.name)}</h3>${k.enabled ? '' : '<span class="badge">off</span>'}
+          <span class="small muted">${plural(fams.length, 'family', 'families')} · ${plural(ok.length, 'style')} · ${k.views_this_month === 1 ? "1 page view" : `${k.views_this_month.toLocaleString()} page views`} this month</span>
+          <span class="spacer"></span><button class="btn sm" data-kedit="${k.id}">Edit</button></div>
+        <div class="small">${k.domains.length ? `Allowed on ${k.domains.map((d) => `<span class="chip">${esc(d)}</span>`).join(' ')}` : '<span class="warnt">No domains yet – no website can use this kit.</span>'}</div>
+        ${out.length ? `<details class="small"><summary class="warnt">${plural(out.length, 'style')} left out</summary><ul>${out.map((f) => `<li><b>${esc(f.family)} ${esc(f.style)}</b>: ${esc(f.problem)}</li>`).join('')}</ul></details>` : ''}
+        <div class="embed"><span class="small muted">Add to the <code>&lt;head&gt;</code> of every page:</span>
+          <div class="tokbox"><code>${esc(tag)}</code><button type="button" class="btn sm" data-copy="${esc(tag)}">Copy</button></div>
+          ${fams.length ? `<span class="small muted">Then use ${fams.map((f) => `<code>font-family: "${esc(f)}"</code>`).join(', ')}.</span>` : ''}</div>
+      </div>`;
+    }).join('') : '<div class="empty"><div class="big">No web kits yet.</div>Create one for each website or brand portal.</div>'}`;
+  $$('[data-copy]', box).forEach((b) => b.onclick = () => navigator.clipboard.writeText(b.dataset.copy).then(() => toast('Copied'), () => toast('Press Ctrl+C to copy')));
+  const lic = new Map(S.lib.licenses.map((l) => [l.id, l]));
+  const webOK = (f) => {
+    if (f.kind !== 'sfnt') return 'not a TrueType/OpenType font';
+    const l = lic.get(f.license_id);
+    if (!l) return 'no license';
+    if (!l.rights.includes('web')) return `“${l.name}” doesn't include web use`;
+    if (l.expired) return `“${l.name}” has expired`;
+    return '';
+  };
+  const form = (k) => {
+    const chosen = new Set((k?.fonts || []).map((f) => f.id));
+    const fams = groupFamilies(S.lib.fonts);
+    return `<label class="field">Name<input type="text" name="name" required maxlength="200" value="${esc(k?.name)}" placeholder="e.g. Company website"></label>
+      <label class="field">Domains <span class="muted">(one per line – *.example.com includes subdomains)</span>
+        <textarea name="domains" rows="3" placeholder="www.example.com&#10;*.example.com">${esc((k?.domains || []).join('\n'))}</textarea></label>
+      <fieldset class="field"><legend>Fonts</legend><input type="search" class="kfilter" placeholder="Filter families">
+        <div class="checks kitfonts">${fams.map((fam) => {
+          const probs = fam.faces.map(webOK);
+          const usable = probs.filter((p) => !p).length;
+          const ids = fam.faces.map((f) => f.id);
+          const on = ids.some((id) => chosen.has(id));
+          return `<label class="check" data-fam="${esc(fam.name.toLowerCase())}"><input type="checkbox" name="fam" value="${ids.join(',')}" ${on ? 'checked' : ''} ${usable || on ? '' : 'disabled'}>
+            <span><b>${esc(fam.name)}</b> <span class="small muted">${usable === fam.faces.length ? plural(usable, 'style') : usable ? `${usable} of ${plural(fam.faces.length, 'style')} licensed for web use` : esc(probs[0])}</span></span></label>`;
+        }).join('')}</div></fieldset>
+      ${k ? `<label class="check"><input type="checkbox" name="enabled" ${k.enabled ? 'checked' : ''}><span><b>On</b> – off: websites get no fonts from this kit</span></label>` : ''}`;
+  };
+  const body = (fd) => ({
+    name: fd.get('name'),
+    domains: String(fd.get('domains') || '').split(/[\s,]+/).filter(Boolean),
+    font_ids: fd.getAll('fam').flatMap((v) => v.split(',').map(Number)),
+  });
+  const wire = (d) => {
+    const f = $('.kfilter', d);
+    f.oninput = () => $$('[data-fam]', d).forEach((l) => { l.hidden = !l.dataset.fam.includes(f.value.trim().toLowerCase()); });
+  };
+  $('#newkit', box).onclick = () => {
+    const d = dialog('New web kit', form(null), { submit: 'Create web kit', wide: true, onSubmit: async (fd) => {
+      await api('POST', '/api/webkits', body(fd)); toast('Web kit created'); refresh();
+    } });
+    wire(d);
+  };
+  $$('[data-kedit]', box).forEach((btn) => btn.onclick = () => {
+    const k = kits.find((x) => x.id === +btn.dataset.kedit);
+    const d = dialog(`Web kit “${k.name}”`, form(k), { wide: true,
+      extra: { label: 'Delete', danger: true, onClick: () => confirmDialog('Delete web kit', `Delete <b>${esc(k.name)}</b>? Websites using it lose these fonts at once.`,
+        async () => { await api('DELETE', `/api/webkits/${k.id}`); toast('Web kit deleted'); refresh(); }) },
+      onSubmit: async (fd) => { await api('PATCH', `/api/webkits/${k.id}`, { ...body(fd), enabled: fd.get('enabled') === 'on' }); toast('Web kit saved'); refresh(); } });
+    wire(d);
+  });
 }
 
 async function renderServices(box) {

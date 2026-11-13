@@ -162,6 +162,8 @@ func TestAPIv1Contract(t *testing.T) {
 	admin.do("POST", "/api/webhooks", map[string]any{"name": "Sink", "url": sink.URL}, &hook)
 	admin.do("POST", "/api/webhooks/"+itoa(hook.ID)+"/test", nil, nil)
 	waitDelivered(t, admin, hook.ID)
+	var kit webkitCreated
+	admin.do("POST", "/api/webkits", map[string]any{"name": "Site", "domains": []string{"example.com"}, "font_ids": []int64{fonts[0].ID}}, &kit)
 	tok := newToken(t, admin, "Contract", "read")
 	fakeUpstream(t, s, ts)
 
@@ -200,6 +202,8 @@ func TestAPIv1Contract(t *testing.T) {
 			path = strings.Replace(path, "{id}", itoa(lic["id"]), 1)
 		case strings.HasPrefix(path, "/webhooks/{id}"):
 			path = strings.Replace(path, "{id}", itoa(hook.ID), 1)
+		case strings.HasPrefix(path, "/webkits/{id}"):
+			path = strings.Replace(path, "{id}", itoa(kit.ID), 1)
 		default:
 			path = strings.Replace(path, "{id}", ids["{id}"], 1)
 		}

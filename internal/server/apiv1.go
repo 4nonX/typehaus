@@ -191,6 +191,17 @@ func (s *Server) v1Routes() []apiRoute {
 			Multipart:   "image: PNG, JPEG, GIF, WebP or BMP up to 10 MB, or url: a link to one; services (optional): comma-separated service ids; free_only (optional): 1 asks for free fonts only (WhatFontIs)",
 			Resp:        identifyResponse{}},
 
+		// web fonts
+		{Paged: true, Method: "GET", Path: "/webkits", Admin: true, H: s.handleListWebkits, Tag: "Web fonts", Summary: "List web kits",
+			Description: "Each kit with its fonts (served, or the problem that keeps one out of the stylesheet) and this month's page views.", Resp: []webkitRow{}},
+		{Method: "POST", Path: "/webkits", Admin: true, H: s.handleCreateWebkit, Tag: "Web fonts", Summary: "Create a web kit",
+			Description: "Websites embed css_url as a stylesheet. Only fonts whose license includes web use and hasn't expired are served, only to the domains listed (www.example.com; *.example.com for subdomains; * for any site). Every stylesheet request from a listed domain counts as a page view against the licenses' monthly limit (web_pageviews).",
+			Body:        webkitReq{}, Resp: webkitCreated{}, Status: 201},
+		{Method: "GET", Path: "/webkits/{id}", Admin: true, H: s.handleGetWebkit, Tag: "Web fonts", Summary: "Get a web kit", Resp: webkitRow{}},
+		{Method: "PATCH", Path: "/webkits/{id}", Admin: true, H: s.handleUpdateWebkit, Tag: "Web fonts", Summary: "Change a web kit",
+			Description: "font_ids replaces the kit's fonts. enabled: false stops serving the kit (its stylesheet answers 404).", Body: webkitReq{}},
+		{Method: "DELETE", Path: "/webkits/{id}", Admin: true, H: s.handleDeleteWebkit, Tag: "Web fonts", Summary: "Delete a web kit"},
+
 		// webhooks
 		{Method: "GET", Path: "/webhook-events", Admin: true, H: s.handleWebhookEvents, Tag: "Webhooks", Summary: "Event types webhooks can subscribe to", Resp: []webhookEventInfo{}},
 		{Paged: true, Method: "GET", Path: "/webhooks", Admin: true, H: s.handleListWebhooks, Tag: "Webhooks", Summary: "List webhooks", Resp: []webhookRow{}},
@@ -1073,6 +1084,7 @@ var typeNames = map[string]string{
 	"webhookRow": "Webhook", "webhookReq": "WebhookChange", "webhookCreated": "WebhookSecret", "webhookDelivery": "WebhookDelivery",
 	"webhookEventInfo": "WebhookEventType", "webhookEvent": "WebhookEvent",
 	"catalogFamily": "CatalogFamily", "catalogImportReq": "CatalogImport", "catalogImportResult": "CatalogImportResult",
+	"webkitRow": "WebKit", "webkitReq": "WebKitChange", "webkitCreated": "WebKitCreated", "webkitFont": "WebKitFont",
 	"lookupResponse": "Lookup", "libraryMatch": "LibraryMatch", "identifyResponse": "Identification",
 	"identifyServiceResult": "IdentificationResult", "identifyMatch": "IdentificationMatch",
 }

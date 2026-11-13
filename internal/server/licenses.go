@@ -82,39 +82,42 @@ func guessDocKind(name string) string {
 }
 
 type licenseRow struct {
-	ID          int64        `json:"id"`
-	Name        string       `json:"name"`
-	Vendor      string       `json:"vendor"`
-	Kind        string       `json:"kind"` // commercial | open
-	SPDX        string       `json:"spdx,omitempty"`
-	Rights      []string     `json:"rights"`
-	Seats       int          `json:"seats"`     // 0 = unlimited
-	SeatUnit    string       `json:"seat_unit"` // users | devices
-	Enforce     bool         `json:"enforce"`
-	Download    bool         `json:"downloadable"`
-	LeaseDays   int          `json:"lease_days"`          // 0 = fonts stay while a device is offline
-	CountAdmins bool         `json:"count_admins"`        // admins take seats and are checked like everyone
-	Reference   string       `json:"reference,omitempty"` // admins only
-	URL         string       `json:"url"`
-	PurchasedOn string       `json:"purchased_on"`
-	ExpiresOn   string       `json:"expires_on"`
-	Notes       string       `json:"notes,omitempty"` // admins only
-	CreatedAt   int64        `json:"created_at"`
-	Families    int          `json:"families"`
-	Fonts       int          `json:"fonts"`
-	Users       int          `json:"users"`
-	Devices     int          `json:"devices"`
-	Machines    int          `json:"machine_devices"` // computers installing it for all users
-	PeakUsers   int          `json:"peak_users"`      // highest daily value, last 12 months
-	PeakDevices int          `json:"peak_devices"`
-	PeakOver    bool         `json:"peak_over"` // more than the seats at some point in the last 12 months
-	Used        int          `json:"used"`      // users or devices, per seat unit
-	Holder      bool         `json:"holder"`
-	Expired     bool         `json:"expired"`
-	ExpiresIn   *int         `json:"expires_in_days,omitempty"`
-	Over        bool         `json:"over"`
-	Full        bool         `json:"full"`
-	Documents   []licenseDoc `json:"documents"`
+	ID           int64        `json:"id"`
+	Name         string       `json:"name"`
+	Vendor       string       `json:"vendor"`
+	Kind         string       `json:"kind"` // commercial | open
+	SPDX         string       `json:"spdx,omitempty"`
+	Rights       []string     `json:"rights"`
+	Seats        int          `json:"seats"`     // 0 = unlimited
+	SeatUnit     string       `json:"seat_unit"` // users | devices
+	Enforce      bool         `json:"enforce"`
+	Download     bool         `json:"downloadable"`
+	LeaseDays    int          `json:"lease_days"`          // 0 = fonts stay while a device is offline
+	WebPageviews int          `json:"web_pageviews"`       // monthly page-view limit for web kits, 0 = none
+	WebViews     int64        `json:"web_views"`           // page views this month by web kits using the license
+	WebOver      bool         `json:"web_over"`            // over the limit this month
+	CountAdmins  bool         `json:"count_admins"`        // admins take seats and are checked like everyone
+	Reference    string       `json:"reference,omitempty"` // admins only
+	URL          string       `json:"url"`
+	PurchasedOn  string       `json:"purchased_on"`
+	ExpiresOn    string       `json:"expires_on"`
+	Notes        string       `json:"notes,omitempty"` // admins only
+	CreatedAt    int64        `json:"created_at"`
+	Families     int          `json:"families"`
+	Fonts        int          `json:"fonts"`
+	Users        int          `json:"users"`
+	Devices      int          `json:"devices"`
+	Machines     int          `json:"machine_devices"` // computers installing it for all users
+	PeakUsers    int          `json:"peak_users"`      // highest daily value, last 12 months
+	PeakDevices  int          `json:"peak_devices"`
+	PeakOver     bool         `json:"peak_over"` // more than the seats at some point in the last 12 months
+	Used         int          `json:"used"`      // users or devices, per seat unit
+	Holder       bool         `json:"holder"`
+	Expired      bool         `json:"expired"`
+	ExpiresIn    *int         `json:"expires_in_days,omitempty"`
+	Over         bool         `json:"over"`
+	Full         bool         `json:"full"`
+	Documents    []licenseDoc `json:"documents"`
 }
 
 // status is a one-word summary for reports.
@@ -128,6 +131,8 @@ func (l *licenseRow) status() string {
 		return "expires soon"
 	case l.SharedInstalls():
 		return "installed for all users"
+	case l.WebOver:
+		return "over its web page views this month"
 	case l.PeakOver:
 		return "over seats within the last 12 months"
 	case l.Full:
@@ -165,7 +170,7 @@ func expiry(expiresOn string, at time.Time) (expired bool, daysLeft *int) {
 // all-users computers (platform "...-machine"): everyone there uses the fonts.
 // Users are counted from user_fonts: switched on themselves or installed for
 // them by a collection.
-const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable, l.lease_days,
+const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable, l.lease_days, l.web_pageviews,
 	l.count_admins, l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
 	(SELECT COUNT(DISTINCT f.family) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
@@ -185,6 +190,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 		q += " WHERE " + where
 	}
 	peaks := s.peaks() // before the list query: one database connection
+	webViews := s.licenseWebViews()
 	rows, err := s.db.Query(q+` ORDER BY l.name COLLATE NOCASE`, append([]any{u.ID}, args...)...)
 	if err != nil {
 		return nil, err
@@ -195,7 +201,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	for rows.Next() {
 		l := &licenseRow{Documents: []licenseDoc{}}
 		var rights string
-		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download, &l.LeaseDays,
+		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download, &l.LeaseDays, &l.WebPageviews,
 			&l.CountAdmins, &l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
 			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Machines, &l.Holder); err != nil {
 			rows.Close()
@@ -219,6 +225,8 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 			peak = l.PeakDevices
 		}
 		l.PeakOver = l.Seats > 0 && peak > l.Seats
+		l.WebViews = webViews[l.ID]
+		l.WebOver = l.WebPageviews > 0 && l.WebViews > int64(l.WebPageviews)
 		if !u.IsAdmin {
 			l.Reference, l.Notes = "", ""
 		}
@@ -358,21 +366,22 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 }
 
 type licenseReq struct {
-	Name        *string   `json:"name"`
-	Vendor      *string   `json:"vendor"`
-	Kind        *string   `json:"kind"`
-	Rights      *[]string `json:"rights"`
-	Seats       *int      `json:"seats"`
-	SeatUnit    *string   `json:"seat_unit"`
-	Enforce     *bool     `json:"enforce"`
-	Download    *bool     `json:"downloadable"`
-	LeaseDays   *int      `json:"lease_days"`
-	CountAdmins *bool     `json:"count_admins"`
-	Reference   *string   `json:"reference"`
-	URL         *string   `json:"url"`
-	PurchasedOn *string   `json:"purchased_on"`
-	ExpiresOn   *string   `json:"expires_on"`
-	Notes       *string   `json:"notes"`
+	Name         *string   `json:"name"`
+	Vendor       *string   `json:"vendor"`
+	Kind         *string   `json:"kind"`
+	Rights       *[]string `json:"rights"`
+	Seats        *int      `json:"seats"`
+	SeatUnit     *string   `json:"seat_unit"`
+	Enforce      *bool     `json:"enforce"`
+	Download     *bool     `json:"downloadable"`
+	LeaseDays    *int      `json:"lease_days"`
+	WebPageviews *int      `json:"web_pageviews"`
+	CountAdmins  *bool     `json:"count_admins"`
+	Reference    *string   `json:"reference"`
+	URL          *string   `json:"url"`
+	PurchasedOn  *string   `json:"purchased_on"`
+	ExpiresOn    *string   `json:"expires_on"`
+	Notes        *string   `json:"notes"`
 }
 
 // columns validates the request and returns the columns to set.
@@ -420,6 +429,12 @@ func (req *licenseReq) columns() (map[string]any, error) {
 			return nil, errors.New("lease_days must be between 0 and 365")
 		}
 		c["lease_days"] = *req.LeaseDays
+	}
+	if req.WebPageviews != nil {
+		if *req.WebPageviews < 0 {
+			return nil, errors.New("web_pageviews can't be negative")
+		}
+		c["web_pageviews"] = *req.WebPageviews
 	}
 	if req.CountAdmins != nil {
 		c["count_admins"] = boolInt(*req.CountAdmins)

@@ -116,6 +116,7 @@ type Server struct {
 	outbound *http.Client
 	catalog  *catalogCache
 	identify *identifyState
+	views    viewCounter // web kit page views not yet written
 }
 
 // New opens storage and prepares the server.
@@ -158,11 +159,27 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	s.recordUsage()
 	go s.janitor(ctx)
 	go s.webhookWorker(ctx)
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				s.flushViews()
+				return
+			case <-t.C:
+				s.flushViews()
+			}
+		}
+	}()
 	return s, nil
 }
 
 // Close releases resources.
-func (s *Server) Close() error { return s.db.Close() }
+func (s *Server) Close() error {
+	s.flushViews()
+	return s.db.Close()
+}
 
 func (s *Server) bootstrapAdmin() error {
 	var n int
@@ -349,6 +366,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/identify", s.user(s.handleIdentify))
 	mux.Handle("GET /api/lookup", s.user(s.handleLookup))
 	mux.HandleFunc("GET /identify-image/{token}", s.handleIdentifyImage)
+
+	// web fonts: admin side, and the public stylesheets and files websites load
+	mux.Handle("GET /api/webkits", s.admin(s.handleListWebkits))
+	mux.Handle("POST /api/webkits", s.admin(s.handleCreateWebkit))
+	mux.Handle("GET /api/webkits/{id}", s.admin(s.handleGetWebkit))
+	mux.Handle("PATCH /api/webkits/{id}", s.admin(s.handleUpdateWebkit))
+	mux.Handle("DELETE /api/webkits/{id}", s.admin(s.handleDeleteWebkit))
+	mux.HandleFunc("GET /webfonts/{file}", s.handleWebfontCSS)
+	mux.HandleFunc("GET /webfonts/{kit}/{file}", s.handleWebfontFile)
 	s.registerV1(mux)
 
 	// agent binaries (public: open-source, needed before a device can authenticate)

@@ -35,27 +35,28 @@ import (
 // webhookEvents is the catalog: event type → description. Part of the API
 // contract: types are only ever added.
 var webhookEvents = map[string]string{
-	"font.added":           "Fonts were added to the library.",
-	"font.deleted":         "Fonts were deleted from the library.",
-	"font.license_changed": "Fonts were assigned to a license (or unassigned).",
-	"collection.created":   "A collection was created.",
-	"collection.updated":   "A collection's name, audience, mode or fonts changed.",
-	"collection.deleted":   "A collection was deleted.",
-	"license.created":      "A license was created.",
-	"license.updated":      "A license was changed.",
-	"license.deleted":      "A license was deleted.",
-	"license.expiring":     "A license expires in 30, 14, 7 or 1 day(s) (sent once per step).",
-	"license.over_seats":   "More people or computers use a license than it has seats (at most once a day).",
-	"request.created":      "Someone requested a font.",
-	"request.answered":     "An administrator answered a font request.",
-	"inventory.copy_found": "A copy of a licensed library font was found installed outside typehaus.",
-	"device.enrolled":      "A computer was connected.",
-	"device.removed":       "A computer was disconnected.",
-	"user.created":         "A user account was created.",
-	"user.updated":         "A user account was changed (e.g. disabled, admin rights).",
-	"user.deleted":         "A user account was deleted.",
-	"token.expiring":       "An API token expires in 7 or 1 day(s) (sent once per step).",
-	"webhook.test":         "Sent by Send test.",
+	"font.added":            "Fonts were added to the library.",
+	"font.deleted":          "Fonts were deleted from the library.",
+	"font.license_changed":  "Fonts were assigned to a license (or unassigned).",
+	"collection.created":    "A collection was created.",
+	"collection.updated":    "A collection's name, audience, mode or fonts changed.",
+	"collection.deleted":    "A collection was deleted.",
+	"license.created":       "A license was created.",
+	"license.updated":       "A license was changed.",
+	"license.deleted":       "A license was deleted.",
+	"license.expiring":      "A license expires in 30, 14, 7 or 1 day(s) (sent once per step).",
+	"license.over_seats":    "More people or computers use a license than it has seats (at most once a day).",
+	"license.webfont_views": "Web kits using a license went over its monthly page views (once a month).",
+	"request.created":       "Someone requested a font.",
+	"request.answered":      "An administrator answered a font request.",
+	"inventory.copy_found":  "A copy of a licensed library font was found installed outside typehaus.",
+	"device.enrolled":       "A computer was connected.",
+	"device.removed":        "A computer was disconnected.",
+	"user.created":          "A user account was created.",
+	"user.updated":          "A user account was changed (e.g. disabled, admin rights).",
+	"user.deleted":          "A user account was deleted.",
+	"token.expiring":        "An API token expires in 7 or 1 day(s) (sent once per step).",
+	"webhook.test":          "Sent by Send test.",
 }
 
 // webhookEvent is the body of every delivery.
@@ -319,6 +320,9 @@ func (s *Server) scheduledEvents() {
 					break
 				}
 			}
+		}
+		if l.WebOver && s.once(fmt.Sprintf("license.webfont_views:%d:%s", l.ID, month(time.Now()))) {
+			s.emit("license.webfont_views", map[string]any{"license": l, "views": l.WebViews, "limit": l.WebPageviews})
 		}
 		if l.Over && s.once(fmt.Sprintf("license.over_seats:%d:%s", l.ID, today)) {
 			s.emit("license.over_seats", map[string]any{"license": l, "used": l.Used, "seats": l.Seats})
@@ -751,25 +755,26 @@ func (s *Server) eventDevice(id int64) *eventDeviceData {
 // webhookDataDocs describes each event's data object (the license, request,
 // user and device objects are the ones the API returns).
 var webhookDataDocs = map[string]string{
-	"font.added":           "data: {fonts: [{id, family, style, full_name, postscript_name, license_id}], by}",
-	"font.deleted":         "data: {fonts: [...as font.added], by}",
-	"font.license_changed": "data: {fonts: [...], license_id (null: none), by}",
-	"collection.created":   "data: {collection: {id, name, description, mode, everyone, group_ids, font_count}, by}",
-	"collection.updated":   "data: {collection, added_fonts?, removed_fonts?, by}",
-	"collection.deleted":   "data: {collection: {id, name}, by}",
-	"license.created":      "data: {license: License, by}",
-	"license.updated":      "data: {license: License, changed: [field names], by}",
-	"license.deleted":      "data: {license: {id, name}, by}",
-	"license.expiring":     "data: {license: License, days_left}",
-	"license.over_seats":   "data: {license: License, used, seats}",
-	"request.created":      "data: {request: FontRequest}",
-	"request.answered":     "data: {request: FontRequest}",
-	"inventory.copy_found": "data: {device: {id, name, user_id, user, platform, hostname}, copies: [{family, license_id, license, copy: InventoryCopy}]}",
-	"device.enrolled":      "data: {device: {id, name, user_id, user, platform, hostname}}",
-	"device.removed":       "data: {device, by}",
-	"user.created":         "data: {user: {id, username, display_name, email, is_admin, disabled}, by}",
-	"user.updated":         "data: {user, by}",
-	"user.deleted":         "data: {user: {id, username}, by}",
-	"token.expiring":       "data: {token: {id, name, expires_at}, days_left}",
-	"webhook.test":         "data: {message, sent_by}",
+	"font.added":            "data: {fonts: [{id, family, style, full_name, postscript_name, license_id}], by}",
+	"font.deleted":          "data: {fonts: [...as font.added], by}",
+	"font.license_changed":  "data: {fonts: [...], license_id (null: none), by}",
+	"collection.created":    "data: {collection: {id, name, description, mode, everyone, group_ids, font_count}, by}",
+	"collection.updated":    "data: {collection, added_fonts?, removed_fonts?, by}",
+	"collection.deleted":    "data: {collection: {id, name}, by}",
+	"license.created":       "data: {license: License, by}",
+	"license.updated":       "data: {license: License, changed: [field names], by}",
+	"license.deleted":       "data: {license: {id, name}, by}",
+	"license.expiring":      "data: {license: License, days_left}",
+	"license.over_seats":    "data: {license: License, used, seats}",
+	"license.webfont_views": "data: {license, views, limit}",
+	"request.created":       "data: {request: FontRequest}",
+	"request.answered":      "data: {request: FontRequest}",
+	"inventory.copy_found":  "data: {device: {id, name, user_id, user, platform, hostname}, copies: [{family, license_id, license, copy: InventoryCopy}]}",
+	"device.enrolled":       "data: {device: {id, name, user_id, user, platform, hostname}}",
+	"device.removed":        "data: {device, by}",
+	"user.created":          "data: {user: {id, username, display_name, email, is_admin, disabled}, by}",
+	"user.updated":          "data: {user, by}",
+	"user.deleted":          "data: {user: {id, username}, by}",
+	"token.expiring":        "data: {token: {id, name, expires_at}, days_left}",
+	"webhook.test":          "data: {message, sent_by}",
 }

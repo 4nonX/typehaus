@@ -347,6 +347,31 @@ CREATE TABLE webhook_once (key TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
 	`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
 ALTER TABLE fonts ADD COLUMN catalog_ref TEXT NOT NULL DEFAULT '';
 `,
+	// 24: web kits (web font delivery), their monthly page views, and a
+	// monthly page-view limit on licenses (0 = none)
+	`CREATE TABLE webkits (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	token TEXT NOT NULL UNIQUE,
+	domains TEXT NOT NULL DEFAULT '',
+	enabled INTEGER NOT NULL DEFAULT 1,
+	created_by INTEGER,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE webkit_fonts (
+	kit_id INTEGER NOT NULL REFERENCES webkits(id) ON DELETE CASCADE,
+	font_id INTEGER NOT NULL REFERENCES fonts(id) ON DELETE CASCADE,
+	PRIMARY KEY (kit_id, font_id)
+);
+CREATE TABLE webkit_views (
+	kit_id INTEGER NOT NULL REFERENCES webkits(id) ON DELETE CASCADE,
+	month TEXT NOT NULL,
+	views INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (kit_id, month)
+);
+ALTER TABLE licenses ADD COLUMN web_pageviews INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {
