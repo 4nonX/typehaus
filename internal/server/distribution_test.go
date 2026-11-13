@@ -141,3 +141,55 @@ func TestInstalledCollections(t *testing.T) {
 		t.Fatalf("adding an over-licensed font must be refused: %d %v", st, e)
 	}
 }
+
+// An enforced one-seat license on a collection installed for everyone: with
+// "count administrators" off, the admin uses the fonts without taking the
+// seat, so the one other person gets it; with it on, the admin holds the
+// seat and the collection would need two.
+func TestInstalledCollectionCountAdmins(t *testing.T) {
+	_, ts, admin := newTestServer(t)
+	uploadFiles(t, admin, map[string][]byte{"Poppins-Regular.ttf": fixture(t, "Poppins-Regular.ttf")})
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	font := fonts[0].ID
+	var lic map[string]int64
+	admin.do("POST", "/api/licenses", map[string]any{"name": "One seat", "kind": "commercial", "seats": 1, "enforce": true, "count_admins": false}, &lic)
+	admin.do("PATCH", "/api/fonts", map[string]any{"font_ids": []int64{font}, "license_id": lic["id"]}, nil)
+	admin.do("POST", "/api/users", map[string]any{"username": "gil", "password": "gilpassword1"}, nil)
+	gil := newClient(t, ts.URL)
+	gil.do("POST", "/api/auth/login", map[string]string{"username": "gil", "password": "gilpassword1"}, nil)
+	adminTok, gilTok := enrollDevice(t, ts, admin), enrollDevice(t, ts, gil)
+
+	var col map[string]int64
+	admin.do("POST", "/api/collections", map[string]any{"name": "All", "everyone": true}, &col)
+	cid := itoa(col["id"])
+	admin.do("POST", "/api/collections/"+cid+"/fonts", map[string]any{"font_ids": []int64{font}}, nil)
+	var imp impactResult
+	admin.do("POST", "/api/collections/impact", map[string]any{"id": col["id"], "mode": "installed", "everyone": true}, &imp)
+	if len(imp.Licenses) != 1 || imp.Licenses[0].After != 1 || imp.Licenses[0].Over {
+		t.Fatalf("admin not counted: one seat is enough: %+v", imp.Licenses)
+	}
+	if st := admin.do("PATCH", "/api/collections/"+cid, map[string]any{"mode": "installed"}, nil); st != 200 {
+		t.Fatalf("switch mode: %d", st)
+	}
+	if !manifestFontIDs(t, ts, adminTok)[font] || !manifestFontIDs(t, ts, gilTok)[font] {
+		t.Fatal("admin (not counted) and gil (the one seat) must both get the font")
+	}
+	var l licenseRow
+	admin.do("GET", "/api/licenses/"+itoa(lic["id"]), nil, &struct {
+		License *licenseRow `json:"license"`
+	}{&l})
+	if l.Used != 1 {
+		t.Fatalf("seats in use: %d", l.Used)
+	}
+
+	// counting admins again: two people for one seat – gil loses it
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"count_admins": true}, nil)
+	if manifestFontIDs(t, ts, gilTok)[font] == manifestFontIDs(t, ts, adminTok)[font] {
+		t.Fatal("only one of them may hold the single seat")
+	}
+	admin.do("POST", "/api/collections/impact", map[string]any{"id": col["id"], "mode": "installed", "everyone": true}, &imp)
+	if imp.Licenses[0].After != 2 || !imp.Licenses[0].Over {
+		t.Fatalf("admins counted: %+v", imp.Licenses)
+	}
+}

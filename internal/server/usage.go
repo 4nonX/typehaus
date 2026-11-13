@@ -10,7 +10,8 @@ import (
 )
 
 // License usage history: for every license and day, the highest number of
-// people and computers that had its fonts. Recorded by the janitor (every
+// people and computers that had its fonts, counted like the seats (admins
+// left out where the license doesn't count them). Recorded by the janitor (every
 // ten minutes) and after changes, so short peaks are kept too. Foundry
 // audits ask for exactly this: "how many installs over the last year?"
 
@@ -24,8 +25,11 @@ func (s *Server) recordUsage() {
 	defer usageMu.Unlock()
 	_, err := s.db.Exec(`INSERT INTO license_usage (day, license_id, users, devices, machines)
 		SELECT ?, l.id,
-			(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
-			(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256 WHERE f.license_id = l.id),
+			(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id JOIN users au ON au.id = a.user_id
+				WHERE f.license_id = l.id AND (l.count_admins = 1 OR au.is_admin = 0)),
+			(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
+				JOIN devices dd ON dd.id = df.device_id JOIN users du ON du.id = dd.user_id
+				WHERE f.license_id = l.id AND (l.count_admins = 1 OR du.is_admin = 0 OR dd.platform LIKE '%-machine')),
 			(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
 				JOIN devices d ON d.id = df.device_id WHERE f.license_id = l.id AND d.platform LIKE '%-machine')
 		FROM licenses l WHERE 1

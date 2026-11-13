@@ -333,12 +333,24 @@ func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *au
 		License   *string `json:"license"`
 		Seats     *int    `json:"seats"`
 		Users     int     `json:"users"`
+		Admins    int     `json:"uncounted_admins"` // admins with it active whose license does not count them
 		Devices   int     `json:"devices"`
 		UserNames string  `json:"user_names"`
 	}
+	// Users and devices are counted the way each font's license counts them:
+	// admins (and their own computers) are left out where a license says so.
 	rows, err := s.db.Query(`SELECT f.family, COUNT(DISTINCT f.id), MAX(l.name), MAX(l.seats),
-		(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.family = f.family),
-		(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f3 ON f3.sha256 = df.sha256 WHERE f3.family = f.family),
+		(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id JOIN users au ON au.id = a.user_id
+			LEFT JOIN licenses l2 ON l2.id = f2.license_id
+			WHERE f2.family = f.family AND (l2.id IS NULL OR l2.count_admins = 1 OR au.is_admin = 0)),
+		(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id JOIN users au ON au.id = a.user_id
+			JOIN licenses l2 ON l2.id = f2.license_id
+			WHERE f2.family = f.family AND l2.count_admins = 0 AND au.is_admin = 1
+			AND NOT EXISTS (SELECT 1 FROM user_fonts a3 JOIN fonts f5 ON f5.id = a3.font_id LEFT JOIN licenses l3 ON l3.id = f5.license_id
+				WHERE a3.user_id = a.user_id AND f5.family = f.family AND (l3.id IS NULL OR l3.count_admins = 1))),
+		(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f3 ON f3.sha256 = df.sha256
+			JOIN devices dd ON dd.id = df.device_id JOIN users du ON du.id = dd.user_id LEFT JOIN licenses l4 ON l4.id = f3.license_id
+			WHERE f3.family = f.family AND (l4.id IS NULL OR l4.count_admins = 1 OR du.is_admin = 0 OR dd.platform LIKE '%-machine')),
 		COALESCE((SELECT GROUP_CONCAT(DISTINCT u.username) FROM user_fonts a JOIN fonts f4 ON f4.id = a.font_id
 			JOIN users u ON u.id = a.user_id WHERE f4.family = f.family), '')
 		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
@@ -353,7 +365,7 @@ func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *au
 		var f famRow
 		var lic sql.NullString
 		var seats sql.NullInt64
-		rows.Scan(&f.Family, &f.Faces, &lic, &seats, &f.Users, &f.Devices, &f.UserNames)
+		rows.Scan(&f.Family, &f.Faces, &lic, &seats, &f.Users, &f.Admins, &f.Devices, &f.UserNames)
 		if lic.Valid {
 			f.License = &lic.String
 			n := int(seats.Int64)

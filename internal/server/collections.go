@@ -371,26 +371,54 @@ func (s *Server) impact(a audience, extraFonts []int64) impactResult {
 		}
 	}
 	res.Devices = len(memberDevices)
-	rows, err := s.db.Query(`SELECT DISTINCT l.id, l.name, l.seats, l.seat_unit, l.enforce FROM licenses l
+	// administrators and their own computers (not all-users ones): left out
+	// of licenses that don't count admins
+	admins, adminDevices := map[int64]bool{}, map[int64]bool{}
+	if r, err := s.db.Query(`SELECT id FROM users WHERE is_admin = 1`); err == nil {
+		for r.Next() {
+			var u int64
+			r.Scan(&u)
+			admins[u] = true
+		}
+		r.Close()
+	}
+	if r, err := s.db.Query(`SELECT d.id FROM devices d JOIN users u ON u.id = d.user_id WHERE u.is_admin = 1 AND d.platform NOT LIKE '%-machine'`); err == nil {
+		for r.Next() {
+			var d int64
+			r.Scan(&d)
+			adminDevices[d] = true
+		}
+		r.Close()
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT l.id, l.name, l.seats, l.seat_unit, l.enforce, l.count_admins FROM licenses l
 		JOIN fonts f ON f.license_id = l.id WHERE f.id IN (`+ph+`) ORDER BY l.name COLLATE NOCASE`, int64Args(ids)...)
 	if err != nil {
 		return res
 	}
-	var lics []seatImpact
+	type licRow struct {
+		seatImpact
+		countAdmins bool
+	}
+	var lics []licRow
 	for rows.Next() {
-		var l seatImpact
-		rows.Scan(&l.LicenseID, &l.Name, &l.Seats, &l.Unit, &l.Enforce)
+		var l licRow
+		rows.Scan(&l.LicenseID, &l.Name, &l.Seats, &l.Unit, &l.Enforce, &l.countAdmins)
 		lics = append(lics, l)
 	}
 	rows.Close()
-	for _, l := range lics {
+	for _, lr := range lics {
+		l := lr.seatImpact
+		skipUser := func(u int64) bool { return !lr.countAdmins && admins[u] }
+		skipDev := func(d int64) bool { return !lr.countAdmins && adminDevices[d] }
 		users := map[int64]bool{}
 		devs := map[int64]bool{}
 		if r2, err := s.db.Query(`SELECT DISTINCT a.user_id FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?`, l.LicenseID); err == nil {
 			for r2.Next() {
 				var u int64
 				r2.Scan(&u)
-				users[u] = true
+				if !skipUser(u) {
+					users[u] = true
+				}
 			}
 			r2.Close()
 		}
@@ -398,7 +426,9 @@ func (s *Server) impact(a audience, extraFonts []int64) impactResult {
 			for r2.Next() {
 				var d int64
 				r2.Scan(&d)
-				devs[d] = true
+				if !skipDev(d) {
+					devs[d] = true
+				}
 			}
 			r2.Close()
 		}
@@ -409,10 +439,14 @@ func (s *Server) impact(a audience, extraFonts []int64) impactResult {
 		}
 		if a.Mode == "installed" {
 			for m := range members {
-				users[m] = true
+				if !skipUser(m) {
+					users[m] = true
+				}
 			}
 			for d := range memberDevices {
-				devs[d] = true
+				if !skipDev(d) {
+					devs[d] = true
+				}
 			}
 		}
 		if l.Unit == "devices" {

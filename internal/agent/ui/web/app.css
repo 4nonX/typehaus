@@ -49,7 +49,7 @@ h2 { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .09e
 /* fonts */
 .fam { padding: 12px 0; border-bottom: 1px solid var(--rule); }
 .fam:last-child { border-bottom: 0; }
-.fam .spec { font-size: 30px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fam .spec { font-size: 30px; line-height: normal; padding: .12em 0; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-width: 0; } /* never clip a preview */
 .fam .meta { font-size: 12.5px; color: var(--ink-3); }
 .empty { color: var(--ink-3); font-size: 14px; padding: 18px 0; line-height: 1.6; }
 

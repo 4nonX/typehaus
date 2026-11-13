@@ -78,6 +78,28 @@ function route() {
 }
 window.addEventListener('hashchange', () => render());
 
+// Theme switch: System → Light → Dark, remembered per browser (theme.js).
+const THEMES = [
+  { v: '', label: 'System theme', svg: '<circle cx="8" cy="8" r="6"/><path d="M8 2v12a6 6 0 0 0 0-12z" fill="currentColor"/>' },
+  { v: 'light', label: 'Light theme', svg: '<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3"/>' },
+  { v: 'dark', label: 'Dark theme', svg: '<path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/>' },
+];
+function setupThemeButton(btn) {
+  const T = window.typehausTheme || { get: () => '', set: () => {} };
+  const show = () => {
+    const t = THEMES.find((x) => x.v === T.get()) || THEMES[0];
+    btn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">${t.svg}</svg>`;
+    btn.title = `${t.label} (click to switch)`;
+    btn.setAttribute('aria-label', btn.title);
+  };
+  btn.onclick = () => {
+    const i = THEMES.findIndex((x) => x.v === T.get());
+    T.set(THEMES[(i + 1) % THEMES.length].v);
+    show();
+  };
+  show();
+}
+
 async function boot() {
   try { S.auth = await api('GET', '/api/auth/config'); } catch { S.auth = { local_login: true }; }
   try { S.me = await api('GET', '/api/me'); } catch { S.me = null; }
@@ -100,12 +122,14 @@ function render() {
         <nav class="main">${nav}</nav>
         <div class="who">
           <span>${esc(S.me.display_name || S.me.username)}${S.me.is_admin ? ' <span class="badge">admin</span>' : ''}</span>
+          <button class="btn ghost sm theme-btn" id="theme"></button>
           <button class="btn ghost sm" id="acct">Account</button>
           <button class="btn ghost sm" id="logout">Log out</button>
         </div>
       </header>
       <main id="page"></main>
     </div>`;
+  setupThemeButton($('#theme'));
   $('#logout').onclick = async () => { await api('POST', '/api/auth/logout').catch(() => {}); S.me = null; S.lib.loaded = false; render(); };
   $('#acct').onclick = accountDialog;
   document.title = `${def.title} · typehaus`;
@@ -248,15 +272,30 @@ function platformNames(p) {
   return p.split(',').map((x) => n[x] || x).join(' & ');
 }
 
+// Families are grouped ignoring case and spacing. Optical sizes are named as
+// separate families in the font files ("DM Sans 18pt", "Minion Pro Display");
+// they are listed under their base family when that family is in the library,
+// and their style rows show the size (f.opsz).
+const OPSZ = /\s+(\d+(?:[.,]\d+)?\s?pt|caption|text|display|subhead|deck|poster|banner|micro|small|fine|headline)$/i;
+const famKey = (n) => n.toLowerCase().replace(/\s+/g, ' ').trim();
 function groupFamilies(fonts) {
+  const all = new Map(); // key -> spelling, over the whole library so a filter never splits a family
+  for (const f of S.lib.fonts || fonts) if (!all.has(famKey(f.family))) all.set(famKey(f.family), f.family.trim());
   const m = new Map();
   for (const f of fonts) {
-    if (!m.has(f.family)) m.set(f.family, []);
-    m.get(f.family).push(f);
+    let key = famKey(f.family);
+    f.opsz = '';
+    const sz = f.names_manual ? null : key.match(OPSZ);
+    if (sz && all.has(key.slice(0, sz.index))) {
+      f.opsz = f.family.trim().slice(sz.index).trim();
+      key = key.slice(0, sz.index);
+    }
+    if (!m.has(key)) m.set(key, []);
+    m.get(key).push(f);
   }
-  return [...m.entries()].map(([name, faces]) => {
-    const rep = [...faces].sort((a, b) => (a.italic - b.italic) || (Math.abs(a.weight - 400) - Math.abs(b.weight - 400)))[0];
-    return { name, faces, rep, active: faces.filter(isOn).length, required: faces.filter((f) => f.required).length };
+  return [...m.entries()].map(([key, faces]) => {
+    const rep = [...faces].sort((a, b) => (!!a.opsz - !!b.opsz) || (a.italic - b.italic) || (Math.abs(a.weight - 400) - Math.abs(b.weight - 400)))[0];
+    return { name: all.get(key) || rep.family, faces, rep, active: faces.filter(isOn).length, required: faces.filter((f) => f.required).length };
   });
 }
 
@@ -319,7 +358,7 @@ async function renderLibrary(page) {
   sz.oninput = () => { L.size = +sz.value; $$('.family > .specimen', page).forEach((el) => el.style.fontSize = L.size + 'px'); };
   $('#expandall', page).onclick = () => {
     if (L.expanded.size) L.expanded.clear();
-    else filteredFonts().forEach((f) => L.expanded.add(f.family));
+    else groupFamilies(filteredFonts()).forEach((fam) => L.expanded.add(fam.name));
     renderLibrary(page);
   };
   if (isAdmin) setupUpload(page);
@@ -368,7 +407,7 @@ function drawFamilies() {
       ${open ? `<div class="styles">${fam.faces.map((f) => `
         <div class="style-row" data-id="${f.id}">
           ${admin ? `<input type="checkbox" class="selface" ${L.selected.has(f.id) ? 'checked' : ''}>` : '<span></span>'}
-          <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
+          <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${f.opsz ? `<span class="badge">${esc(f.opsz)}</span> ` : ''}${esc(f.style)}${f.names_manual ? ` <span class="badge" title="Named by hand. Detected from the file: ${esc(f.family_auto)} / ${esc(f.style_auto)}">manual</span>` : ''} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
           <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
           ${S.me.downloads ? `<button class="iconbtn dlface" title="Download ${esc(f.style)}" aria-label="Download ${esc(f.full_name)}">↓</button>` : '<span></span>'}
           ${f.required
@@ -555,6 +594,9 @@ function drawBulk() {
     <select id="b-coll"><option value="">Add to collection…</option>${L.collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
     ${inColl ? '<button class="btn sm" id="b-rm">Remove from this collection</button>' : ''}
     <select id="b-lic"><option value="">Assign license…</option><option value="0">— No license —</option>${L.licenses.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
+    <button class="btn sm" id="b-fam" title="Merge into another family or split off under a new name">Move to family…</button>
+    ${L.fonts.some((f) => L.selected.has(f.id) && f.conflict) ? '<button class="btn sm" id="b-cur" title="Replace the other versions of these styles with the selected ones">Make current version</button>' : ''}
+    ${L.fonts.some((f) => L.selected.has(f.id) && f.names_manual) ? '<button class="btn sm" id="b-auto" title="Use the family and style names detected from the files again">Use detected names</button>' : ''}
     <button class="btn sm" id="b-dl">Download</button>
     <button class="btn sm" id="b-del">Delete</button>
     <span class="spacer"></span>
@@ -563,6 +605,24 @@ function drawBulk() {
   const reload = async (msg) => { toast(msg); L.loaded = false; await renderLibrary($('#page')); };
   $('#b-clear').onclick = () => { L.selected.clear(); drawFamilies(); };
   $('#b-dl').onclick = () => downloadFonts(ids);
+  $('#b-fam').onclick = () => moveToFamily(ids, reload);
+  if ($('#b-cur')) $('#b-cur').onclick = () => {
+    const sel = L.fonts.filter((f) => L.selected.has(f.id) && f.postscript_name);
+    const pairs = sel.flatMap((n) => L.fonts.filter((o) => o.postscript_name === n.postscript_name && o.id !== n.id && !L.selected.has(o.id))
+      .map((o) => ({ old_id: o.id, new_id: n.id, name: n.full_name, from: o.version, to: n.version })));
+    if (!pairs.length) { toast('No other versions of the selected styles'); return; }
+    confirmDialog('Make current version', `Replace ${plural(pairs.length, 'other version')} with the selected ${plural(sel.length, 'style')}?
+      <ul class="small">${pairs.slice(0, 8).map((p) => `<li>${esc(p.name)}: v${esc(p.from)} → v${esc(p.to)}</li>`).join('')}${pairs.length > 8 ? '<li>…</li>' : ''}</ul>
+      Collections and activations move to the selected styles, licenses too unless a style comes from another vendor; the other versions are removed.`,
+    async () => {
+      const r = await api('POST', '/api/fonts/replace', { pairs });
+      L.selected.clear();
+      await reload(`${plural(r.replaced, 'style')} updated` + (r.license_not_carried ? `; ${plural(r.license_not_carried, 'style')} from another vendor still need a license` : ''));
+    }, 'Replace');
+  };
+  if ($('#b-auto')) $('#b-auto').onclick = async () => {
+    try { await api('POST', '/api/fonts/family', { font_ids: ids, reset: true }); L.selected.clear(); await reload('Detected names restored'); } catch (ex) { fail(ex); }
+  };
   $('#b-coll').onchange = async (e) => {
     if (!e.target.value) return;
     try { await api('POST', `/api/collections/${e.target.value}/fonts`, { font_ids: ids }); await reload('Added to collection'); } catch (ex) { fail(ex); }
@@ -577,6 +637,31 @@ function drawBulk() {
   $('#b-del').onclick = () => confirmDialog('Delete fonts',
     `Permanently delete ${plural(n, 'style')} from the library? They will be removed from every device on its next sync.`,
     async () => { await api('DELETE', '/api/fonts', { font_ids: ids }); L.selected.clear(); await reload('Deleted'); });
+}
+
+// Merge styles into a family or split them off under a new name. Automatic
+// grouping is a guess; this is the manual override, and it sticks.
+function moveToFamily(ids, reload) {
+  const L = S.lib;
+  const sel = L.fonts.filter((f) => ids.includes(f.id));
+  const families = [...new Set(groupFamilies(L.fonts).map((fam) => fam.name))].sort((a, b) => a.localeCompare(b));
+  const current = [...new Set(sel.map((f) => f.family))];
+  const one = sel.length === 1 ? sel[0] : null;
+  dialog('Move to family', `
+    <p class="small muted">${plural(sel.length, 'style')} from ${current.map(esc).join(', ')}. Pick an existing family to merge them into it,
+      or type a new name to split them off. Names set here are kept when fonts are re-read; <i>Use detected names</i> undoes it.</p>
+    <label class="field">Family<input type="text" name="family" required maxlength="200" list="fam-list" value="${esc(current.length === 1 ? current[0] : '')}" autocomplete="off"></label>
+    <datalist id="fam-list">${families.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+    ${one ? `<label class="field">Style<input type="text" name="style" maxlength="200" value="${esc(one.style)}"></label>` : ''}`, {
+    submit: 'Move',
+    onSubmit: async (fd) => {
+      const body = { font_ids: ids, family: fd.get('family') };
+      if (one && fd.get('style') && fd.get('style') !== one.style) body.style = fd.get('style');
+      await api('POST', '/api/fonts/family', body);
+      L.selected.clear();
+      await reload('Moved to ' + fd.get('family'));
+    },
+  });
 }
 
 function setupUpload(page) {
@@ -639,7 +724,7 @@ function batches(files) {
   return out;
 }
 
-async function upload(files) {
+async function upload(files, force = false) {
   files = files.filter((f) => f.size > 0);
   if (!files.length) return;
   const L = S.lib;
@@ -649,6 +734,7 @@ async function upload(files) {
   for (let i = 0; i < parts.length; i++) {
     if (drop) drop.innerHTML = `<b>Uploading ${plural(files.length, 'file')}…</b>${parts.length > 1 ? ` <span class="muted">(${i + 1} of ${parts.length})</span>` : ''}`;
     const fd = new FormData();
+    if (force) fd.append('force', '1');
     if (!['all', 'active'].includes(String(L.coll))) fd.append('collection_id', L.coll);
     parts[i].forEach((f) => fd.append('files', f, f.name));
     try {
@@ -661,9 +747,56 @@ async function upload(files) {
   const errs = all.filter((x) => x.status === 'error');
   toast(`${added} added${dup ? `, ${dup} already in library` : ''}${errs.length ? `, ${errs.length} failed` : ''}`);
   errs.slice(0, 5).forEach((x) => toast(`${x.file}: ${x.message}`, true));
-  all.filter((x) => x.status === 'added' && x.message).slice(0, 3).forEach((x) => toast(`${x.file}: ${x.message}`));
+  all.filter((x) => x.status === 'added' && x.message && !x.updates).slice(0, 3).forEach((x) => toast(`${x.file}: ${x.message}`));
   L.loaded = false;
   renderLibrary($('#page'));
+  // other versions of fonts already in the library, and files skipped as the
+  // same font: the admin decides
+  const updates = all.flatMap((x) => x.updates || []);
+  const same = all.filter((x) => x.same_font).map((x) => ({ result: x, file: files.find((f) => x.file === f.name || x.file.startsWith(f.name + ' →')) }))
+    .filter((x) => x.file);
+  if (updates.length || same.length) versionDialog(updates, same);
+}
+
+// After an upload: replace older versions or keep both, and upload files that
+// were skipped as the same font anyway (e.g. a corrected build that kept its
+// version number).
+function versionDialog(updates, same) {
+  const vtag = (u) => u.newer ? 'newer' : (u.new_version === u.old_version ? 'same version' : 'older');
+  // replace by default only for a newer version from the same vendor
+  const isUpdate = (u) => u.newer && !u.other_vendor;
+  const notes = (u) => [
+    u.other_vendor ? `<span class="badge warn">other vendor</span> ${esc(u.old_vendor)} → ${esc(u.new_vendor)}: not an update but a different font with the same name; its license is not carried over` : '',
+    u.license_changed ? '<span class="badge warn">license changed</span> the license notice in the file differs, check the terms' : '',
+  ].filter(Boolean).map((n) => `<div class="small">${n}</div>`).join('');
+  const d = dialog('Other versions', `
+    ${updates.length ? `<p class="small muted">These styles share their PostScript name with fonts already in the library. Only one of them can be
+      active at a time. <b>Replace</b> moves licenses, collections and everyone's activations to the uploaded version and removes the old one;
+      computers switch over at their next sync.</p>
+    <table class="t"><tbody>${updates.map((u, i) => `<tr><td><b>${esc(u.name)}</b>
+      <div class="small muted">v${esc(u.old_version || '?')} → v${esc(u.new_version || '?')} · ${vtag(u)}</div></td>
+      ${notes(u)}</td>
+      <td><select name="u-${i}"><option value="replace" ${isUpdate(u) ? 'selected' : ''}>Replace the old version</option>
+        <option value="keep" ${isUpdate(u) ? '' : 'selected'}>Keep both</option></select></td></tr>`).join('')}</tbody></table>` : ''}
+    ${same.length ? `<h4>Skipped as the same font</h4><p class="small muted">Same names, version, vendor, license notice, characters and metrics as a font already in the
+      library, in a different file. Tick a file to upload it anyway (for example a corrected build); you can then replace the old one.</p>
+      ${same.map((x, i) => `<label class="check"><input type="checkbox" name="s-${i}"> <span>${esc(x.result.file)} <span class="small muted">${esc(x.result.message)}</span></span></label>`).join('')}` : ''}`, {
+    submit: 'Apply',
+    wide: true,
+    onSubmit: async (fd) => {
+      const pairs = updates.filter((u, i) => fd.get(`u-${i}`) === 'replace').map((u) => ({ old_id: u.old_id, new_id: u.new_id }));
+      if (pairs.length) {
+        const r = await api('POST', '/api/fonts/replace', { pairs });
+        toast(`${plural(r.replaced, 'style')} updated to the new version` +
+          (r.license_not_carried ? `; ${plural(r.license_not_carried, 'style')} from another vendor still need a license` : ''));
+        S.lib.loaded = false;
+        renderLibrary($('#page'));
+      }
+      const again = same.filter((x, i) => fd.get(`s-${i}`)).map((x) => x.file);
+      if (again.length) setTimeout(() => upload(again, true), 0);
+    },
+  });
+  return d;
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,27 +1188,39 @@ async function familyInfo(fam) {
       ${r.designer ? `<dt>Designer</dt><dd>${esc(r.designer)}</dd>` : ''}
       ${r.manufacturer ? `<dt>Foundry</dt><dd>${esc(r.manufacturer)}</dd>` : ''}
       ${r.version ? `<dt>Version</dt><dd>${esc(r.version)}</dd>` : ''}
-      <dt>Styles</dt><dd>${fam.faces.map((f) => esc(f.style)).join(', ')}</dd>
+      <dt>Styles</dt><dd>${fam.faces.map((f) => esc((f.opsz ? f.opsz + ' ' : '') + f.style)).join(', ')}</dd>
       <dt>Format</dt><dd>${formats.map(esc).join(', ')}</dd>
     </dl>
     <h4>License</h4>
     ${mixed ? '<p class="small muted">The styles of this family have different licenses; showing the license of the regular style.</p>' : ''}
     ${lic ? licenseCard(lic) : `<p class="muted">${admin ? 'No license recorded for this family.' : 'No license information recorded. Ask an administrator before using this font commercially.'}</p>`}
     ${admin ? `<label class="field">Assign license to all ${plural(fam.faces.length, 'style')}
-      <select id="fi-lic"><option value="">— keep —</option><option value="0">No license</option>${L.licenses.map((l) => `<option value="${l.id}" ${lic && l.id === lic.id && !mixed ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>` : ''}
+      <select id="fi-lic"><option value="">— keep —</option><option value="0">No license</option>${L.licenses.map((l) => `<option value="${l.id}" ${lic && l.id === lic.id && !mixed ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
+      ${fam.faces.length > 1 ? `<details class="perstyle" ${mixed ? 'open' : ''}><summary>License per style</summary>
+        <table class="t"><tbody>${fam.faces.map((f) => `<tr><td>${esc((f.opsz ? f.opsz + ' ' : '') + f.style)}</td><td><select data-face="${f.id}">
+          <option value="0" ${f.license_id ? '' : 'selected'}>No license</option>
+          ${L.licenses.map((l) => `<option value="${l.id}" ${f.license_id === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select></td></tr>`).join('')}
+        </tbody></table></details>` : ''}` : ''}
     <h4>Embedding permission <span class="muted small">(from the font file)</span></h4>
     <p class="small">${fsTypes.map(esc).join('<br>')}</p>
-    ${detail.copyright || detail.license_text || detail.license_url ? `<details class="embedded"><summary>Copyright and license text in the font</summary>
-      ${detail.copyright ? `<p class="small">${esc(detail.copyright)}</p>` : ''}
-      ${detail.license_text ? `<pre class="lic">${esc(detail.license_text)}</pre>` : ''}
-      ${detail.license_url ? `<p class="small">${/^https?:\/\//i.test(detail.license_url) ? `<a href="${esc(detail.license_url)}" target="_blank" rel="noopener noreferrer">${esc(detail.license_url)} ↗</a>` : esc(detail.license_url)}</p>` : ''}
-    </details>` : ''}`,
+    <details class="embedded"><summary>What the font file says (foundry, copyright, license)</summary>${fontEvidence(detail)}</details>`,
   {
     submit: admin ? 'Save' : 'Close', cancel: admin, wide: true,
     onSubmit: async () => {
-      const v = admin ? $('#fi-lic', d).value : '';
-      if (v === '') return;
-      await api('PATCH', '/api/fonts', { font_ids: fam.faces.map((f) => f.id), license_id: +v });
+      if (!admin) return;
+      const v = $('#fi-lic', d).value;
+      if (v !== '') {
+        await api('PATCH', '/api/fonts', { font_ids: fam.faces.map((f) => f.id), license_id: +v });
+      } else {
+        // per-style choices, grouped by license
+        const groups = {};
+        $$('[data-face]', d).forEach((sel) => {
+          const face = fam.faces.find((f) => f.id === +sel.dataset.face);
+          if (+sel.value !== (face.license_id || 0)) (groups[sel.value] ||= []).push(face.id);
+        });
+        if (!Object.keys(groups).length) return;
+        for (const [lid, ids] of Object.entries(groups)) await api('PATCH', '/api/fonts', { font_ids: ids, license_id: +lid });
+      }
       toast('License assigned');
       L.loaded = false;
       if (route() === 'library') await renderLibrary($('#page'));
@@ -1098,7 +1243,7 @@ async function renderLicenses(page) {
   page.innerHTML = `
     <div class="row"><div><h1>Licenses</h1><p class="sub">What you bought, what it allows, who uses it – and the documents that prove it.</p></div>
       <span class="spacer"></span>
-      <button class="btn" id="detect" title="Assign open-source licenses (OFL, Apache, …) to fonts whose embedded license information names one">Detect open-source licenses</button>
+      <button class="btn" id="detect" title="Assign open-source licenses (OFL, Apache, …) named in the fonts, then suggest commercial licenses by foundry">Detect licenses</button>
       <a class="btn" href="/api/licenses/export.csv" download title="Licenses, seats, usage, peaks and documents">Export CSV</a>
       <a class="btn" href="/api/licenses/history.csv" download title="Daily usage per license, last 12 months">Usage history</a>
       <button class="btn primary" id="new">New license</button></div>
@@ -1122,7 +1267,7 @@ async function renderLicenses(page) {
     <h2>Usage by family</h2>
     <table class="t"><thead><tr><th>Family</th><th>License</th><th class="num">Styles</th><th>Active users</th><th class="num">Devices</th></tr></thead><tbody>
     ${usage.map((u) => `<tr><td><b>${esc(u.family)}</b></td><td>${u.license ? esc(u.license) : '<span class="muted small">unassigned</span>'}</td>
-      <td class="num">${u.faces}</td><td title="${esc(u.user_names)}">${u.users}${u.user_names ? ` <span class="small muted">${esc(u.user_names.split(',').slice(0, 4).join(', '))}${u.user_names.split(',').length > 4 ? '…' : ''}</span>` : ''}</td>
+      <td class="num">${u.faces}</td><td title="${esc(u.user_names)}">${u.users}${u.uncounted_admins ? ` <span class="small muted" title="Administrators with it active whose license does not count admins">+${plural(u.uncounted_admins, 'admin')}</span>` : ''}${u.user_names ? ` <span class="small muted">${esc(u.user_names.split(',').slice(0, 4).join(', '))}${u.user_names.split(',').length > 4 ? '…' : ''}</span>` : ''}</td>
       <td class="num">${u.devices}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Library is empty.</td></tr>'}
     </tbody></table>
     ${inventorySection(inv)}`;
@@ -1131,8 +1276,14 @@ async function renderLicenses(page) {
   $('#detect', page).onclick = async () => {
     try {
       const r = await api('POST', '/api/licenses/detect');
-      toast(r.assigned ? `${plural(r.assigned, 'style')} assigned${r.created.length ? ' · created ' + r.created.join(', ') : ''}` : 'No unassigned fonts with a recognisable open-source license');
-      refresh();
+      if (r.assigned) toast(`${plural(r.assigned, 'style')} assigned to open-source licenses${r.created.length ? ' · created ' + r.created.join(', ') : ''}`);
+      const sugs = await api('GET', '/api/licenses/suggestions');
+      if (!sugs.length) {
+        if (!r.assigned) toast('No unassigned fonts with a recognisable license');
+        refresh();
+        return;
+      }
+      commercialSuggestions(sugs, refresh);
     } catch (e) { fail(e); }
   };
   $$('[data-open]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); licenseDetail(+a.dataset.open, refresh); });
@@ -1164,6 +1315,71 @@ function inventorySection(inv) {
     </tbody></table>`;
 }
 
+// Commercial fonts are only suggested: the file tells who made the font, not
+// what was bought. Ticked families go to the vendor's license (or a new one
+// that asks for seats, term and invoice).
+function commercialSuggestions(sugs, done) {
+  const lics = S.lib.licenses || [];
+  // per family: the suggestion, any existing license, or leave it alone
+  const pick = (s, i) => `<select name="lic-${i}">
+      <option value="">Leave unassigned</option>
+      <option value="new" ${s.license_id ? '' : 'selected'}>New: ${esc(s.license_name)}</option>
+      ${lics.map((l) => `<option value="${l.id}" ${s.license_id === l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
+    </select>`;
+  const d = dialog('Commercial fonts', `
+    <p class="small muted">These families name a commercial foundry in their copyright, trademark or vendor fields – a guess,
+      not proof. Check the evidence, then choose the license each family belongs to. New license records ask for the seats,
+      term and invoice afterwards.</p>
+    <table class="t"><tbody>${sugs.map((s, i) => `<tr>
+      <td><b>${esc(s.family)}</b> <span class="small muted">${plural(s.font_ids.length, 'style')}</span>
+        <div class="small muted">${esc(s.reason)} · <a href="#" data-ev="${i}">evidence</a></div>
+        <div class="ev small" id="ev-${i}" hidden></div></td>
+      <td>${pick(s, i)}</td></tr>`).join('')}
+    </tbody></table>`, {
+    submit: 'Assign',
+    wide: true,
+    onSubmit: async (fd) => {
+      const create = [], existing = {};
+      sugs.forEach((s, i) => {
+        const v = fd.get(`lic-${i}`);
+        if (v === 'new') create.push({ font_ids: s.font_ids, vendor: s.vendor });
+        else if (v) (existing[v] ||= []).push(...s.font_ids);
+      });
+      let n = 0, created = [];
+      if (create.length) {
+        const r = await api('POST', '/api/licenses/suggestions', { items: create });
+        n += r.assigned; created = r.created;
+      }
+      for (const [lid, ids] of Object.entries(existing)) {
+        await api('PATCH', '/api/fonts', { font_ids: ids, license_id: +lid });
+        n += ids.length;
+      }
+      toast(n ? `${plural(n, 'style')} assigned${created.length ? ' · created ' + created.join(', ') : ''}` : 'Nothing assigned');
+      done();
+    },
+  });
+  $$('[data-ev]', d).forEach((a) => a.onclick = async (e) => {
+    e.preventDefault();
+    const i = +a.dataset.ev, box = $(`#ev-${i}`, d);
+    if (!box.hidden) { box.hidden = true; return; }
+    try { box.innerHTML = fontEvidence(await api('GET', `/api/fonts/${sugs[i].font_ids[0]}`)); box.hidden = false; } catch (ex) { fail(ex); }
+  });
+}
+
+// What a font file says about who made it and under which terms.
+function fontEvidence(detail) {
+  const f = detail.font || {};
+  const rows = [
+    ['Foundry', f.manufacturer], ['Vendor ID', detail.vendor_id], ['Copyright', detail.copyright],
+    ['Trademark', detail.trademark], ['License URL', detail.license_url],
+  ].filter(([, v]) => v);
+  const val = (k, v) => k === 'License URL' && /^https?:\/\//i.test(v)
+    ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)} ↗</a>` : esc(v);
+  return `<dl class="kv2">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${val(k, v)}</dd>`).join('')}</dl>
+    ${detail.license_text ? `<pre class="lic">${esc(detail.license_text)}</pre>` : ''}
+    ${rows.length || detail.license_text ? '' : '<p class="muted">The font file names no foundry and no license.</p>'}`;
+}
+
 function editLicense(l, done) {
   const rights = l ? l.rights : ['desktop'];
   const d = dialog(l ? 'Edit license' : 'New license', `
@@ -1191,6 +1407,8 @@ function editLicense(l, done) {
       <span><b>Allow direct download</b> – users may download the font files to install them themselves. Off: fonts are only installed through the typehaus app, which tracks every seat.</span></label>
     <label class="check"><input type="checkbox" name="enforce" ${l?.enforce ? 'checked' : ''}>
       <span><b>Enforce</b> – refuse activations when all seats are taken and remove the fonts from computers when the license has expired. Off: typehaus only warns.</span></label>
+    <label class="check"><input type="checkbox" name="count_admins" ${!l || l.count_admins ? 'checked' : ''}>
+      <span><b>Count administrators</b> – admins take seats and are held to this license's limits and download setting like everyone else. Off: admins use the fonts without taking a seat.</span></label>
     <div class="two">
       <label class="field">Order / invoice reference<input type="text" name="reference" maxlength="200" value="${esc(l?.reference)}"></label>
       <label class="field">License terms URL<input type="url" name="url" placeholder="https://" value="${esc(l?.url)}"></label>
@@ -1204,6 +1422,7 @@ function editLicense(l, done) {
         name: fd.get('name'), kind: fd.get('kind'),
         vendor: fd.get('vendor'), rights: fd.getAll('rights'), lease_days: +fd.get('lease_days') || 0,
         seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on', downloadable: fd.get('downloadable') === 'on',
+        count_admins: fd.get('count_admins') === 'on',
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
         reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),
       };

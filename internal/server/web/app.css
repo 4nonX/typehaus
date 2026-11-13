@@ -16,14 +16,25 @@
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --radius: 10px;
 }
+/* dark follows the system unless the user picked light; an explicit "dark"
+   applies whatever the system says (theme.js sets data-theme) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --paper: #161512; --paper-2: #1f1d19; --card: #1c1b17;
     --ink: #efe9dd; --ink-2: #c4bdb0; --ink-3: #8b8578; --rule: #34312b;
     --accent: #f0603f;
   }
 }
-:root { color-scheme: light dark; } /* native controls (menus, date pickers, scrollbars) follow the theme */
+:root[data-theme="dark"] {
+  --paper: #161512; --paper-2: #1f1d19; --card: #1c1b17;
+  --ink: #efe9dd; --ink-2: #c4bdb0; --ink-3: #8b8578; --rule: #34312b;
+  --accent: #f0603f;
+}
+/* native controls (menus, date pickers, scrollbars) follow the theme */
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+.theme-btn svg { width: 15px; height: 15px; vertical-align: -3px; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--sans); }
 a { color: inherit; }
@@ -133,9 +144,12 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .family-head .meta { color: var(--ink-3); font-size: 13px; }
 .family-head .expand { background: none; border: 0; cursor: pointer; color: var(--ink-3); font-size: 13px; padding: 2px 6px; border-radius: 6px; }
 .family-head .expand:hover { background: var(--paper-2); color: var(--ink); }
+/* A preview is never clipped: wide faces and long text wrap, and the line
+   height comes from the font's own metrics, with room for swashes and
+   accents that reach beyond them. */
 .specimen {
-  margin: 10px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25;
-  color: var(--ink); min-height: 1.25em; transition: opacity .2s;
+  margin: 10px 0 0; white-space: normal; overflow-wrap: anywhere; overflow: visible; line-height: normal;
+  padding: .12em 0; min-width: 0; color: var(--ink); min-height: 1.25em; transition: opacity .2s;
 }
 .specimen.loading { opacity: .25; }
 .specimen.nopreview { font: italic 15px var(--serif); color: var(--ink-3); }
@@ -283,3 +297,6 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .inv td { vertical-align: top; }
 .inv .copy + .copy { margin-top: 8px; }
 .inv .path { font: 12px/1.4 var(--mono); color: var(--ink-3); word-break: break-all; }
+.ev { margin: 6px 0 0; }
+.perstyle { margin: 8px 0 0; }
+.perstyle summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }

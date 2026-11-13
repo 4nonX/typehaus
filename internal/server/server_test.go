@@ -69,8 +69,17 @@ func (c *client) do(method, path string, body any, out any) int {
 
 func (c *client) upload(name string, data []byte) []int64 {
 	c.t.Helper()
+	return c.uploadForce(name, data, false)
+}
+
+// uploadForce with force set is "upload anyway": no same-font check.
+func (c *client) uploadForce(name string, data []byte, force bool) []int64 {
+	c.t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	if force {
+		mw.WriteField("force", "1")
+	}
 	fw, _ := mw.CreateFormFile("files", name)
 	fw.Write(data)
 	mw.Close()
@@ -286,8 +295,14 @@ func TestConflictResolution(t *testing.T) {
 	name, data := testFont(t)
 	_, ts, admin := newTestServer(t)
 	v1 := admin.upload(name, data)
-	// same font, different bytes (e.g. another version): trailing padding
-	v2 := admin.upload("v2-"+name, append(append([]byte{}, data...), 0, 0, 0, 0))
+	// the same font in a different file is skipped as a duplicate ...
+	padded := append(append([]byte{}, data...), 0, 0, 0, 0)
+	if again := admin.upload("v2-"+name, padded); again[0] != v1[0] {
+		t.Fatalf("same font in another file should map to %d, got %v", v1[0], again)
+	}
+	// ... unless uploaded anyway (e.g. a corrected build that kept its
+	// version): then both share the PostScript name and conflict
+	v2 := admin.uploadForce("v2-"+name, padded, true)
 	if v1[0] == v2[0] {
 		t.Fatal("expected a second font record")
 	}

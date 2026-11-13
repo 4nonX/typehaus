@@ -84,9 +84,15 @@ func TestDownloads(t *testing.T) {
 	if st != 200 || body != string(poppins) || h.Get("X-Typehaus-Skipped") == "" {
 		t.Fatalf("partial download: %d %v", st, h)
 	}
-	if st, _, _ := admin.get("/api/fonts/download?ids=" + itoa(byFam["Demo"])); st != 200 {
-		t.Fatalf("admins can always download: %d", st)
+	// admins are held to the license like everyone, unless it says not to count them
+	if st, _, _ := admin.get("/api/fonts/download?ids=" + itoa(byFam["Demo"])); st != 403 {
+		t.Fatalf("admin counted, download forbidden: %d", st)
 	}
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"count_admins": false}, nil)
+	if st, _, _ := admin.get("/api/fonts/download?ids=" + itoa(byFam["Demo"])); st != 200 {
+		t.Fatalf("admin not counted: %d", st)
+	}
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"count_admins": true}, nil)
 
 	// enforced license with seats: only seat holders
 	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"downloadable": true, "enforce": true, "seats": 5}, nil)
@@ -114,7 +120,8 @@ func TestDownloads(t *testing.T) {
 	if me["downloads"] != false {
 		t.Fatalf("/api/me downloads: %v", me["downloads"])
 	}
-	if st, _, _ := admin.get("/api/fonts/download?ids=" + itoa(byFam["Demo"])); st != 200 {
+	// (an unlicensed font: the switch is what is tested, not a license)
+	if st, _, _ := admin.get("/api/fonts/download?ids=" + itoa(byFam["Poppins"])); st != 200 {
 		t.Fatalf("admins unaffected by the switch: %d", st)
 	}
 }

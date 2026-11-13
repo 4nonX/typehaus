@@ -240,6 +240,28 @@ CREATE INDEX device_inventory_sha ON device_inventory(sha256);
 CREATE INDEX device_inventory_family ON device_inventory(family COLLATE NOCASE);
 ALTER TABLE devices ADD COLUMN inventory_at INTEGER;
 `,
+	// 12: whether administrators take seats and are held to a license's limits
+	`ALTER TABLE licenses ADD COLUMN count_admins INTEGER NOT NULL DEFAULT 1;`,
+	// 13: vendor ID and trademark from the font file, for recognising commercial
+	// foundries without reading the files again; meta_checked marks fonts
+	// uploaded before this whose files have been read once since
+	`ALTER TABLE fonts ADD COLUMN vendor_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN trademark TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN meta_checked INTEGER NOT NULL DEFAULT 0;`,
+	// 14: content fingerprint of a face (fontmeta.fingerprint), to recognise the
+	// same font in a different file; '' until computed
+	`ALTER TABLE fonts ADD COLUMN fingerprint TEXT NOT NULL DEFAULT '';
+CREATE INDEX fonts_postscript ON fonts(postscript_name);`,
+	// 15: family/style naming version; 0 = named before legacy family names
+	// ("Helvetica Light" / "Regular") were folded into their family
+	`ALTER TABLE fonts ADD COLUMN names_v INTEGER NOT NULL DEFAULT 0;`,
+	// 16: family and style as detected from the file, kept apart from the
+	// effective names in family/style, which an admin can override by hand
+	// (names_manual) to merge or split families
+	`ALTER TABLE fonts ADD COLUMN family_auto TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN style_auto TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN names_manual INTEGER NOT NULL DEFAULT 0;
+UPDATE fonts SET family_auto = family, style_auto = style;`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {
@@ -262,6 +284,30 @@ func migrate(db *sql.DB) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		return err
 	}
+	// Pre-release builds of 0.5.0 numbered the font-naming and admin-seat
+	// migrations (now 12–16) as 6–10. Such a database has licenses.count_admins
+	// but not collections.mode: apply 6–11 now and continue after the
+	// migrations it already has.
+	if v >= 6 && v <= 10 && hasColumn(db, "licenses", "count_admins") && !hasColumn(db, "collections", "mode") {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		for i := 5; i < 11; i++ {
+			if _, err := tx.Exec(migrations[i]); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d (renumbered database): %w", i+1, err)
+			}
+		}
+		v += 6
+		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, v)); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
 	for i := v; i < len(migrations); i++ {
 		tx, err := db.Begin()
 		if err != nil {
@@ -280,4 +326,10 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func hasColumn(db *sql.DB, table, col string) bool {
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, col).Scan(&n)
+	return n > 0
 }

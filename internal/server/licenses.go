@@ -46,6 +46,7 @@ type licenseRow struct {
 	Enforce     bool         `json:"enforce"`
 	Download    bool         `json:"downloadable"`
 	LeaseDays   int          `json:"lease_days"`          // 0 = fonts stay while a device is offline
+	CountAdmins bool         `json:"count_admins"`        // admins take seats and are checked like everyone
 	Reference   string       `json:"reference,omitempty"` // admins only
 	URL         string       `json:"url"`
 	PurchasedOn string       `json:"purchased_on"`
@@ -112,12 +113,20 @@ func expiry(expiresOn string, at time.Time) (expired bool, daysLeft *int) {
 	return false, &d
 }
 
+// Seat counts leave administrators out when the license says not to count them
+// (count_admins = 0); for devices that means devices owned by an admin, except
+// all-users computers (platform "...-machine"): everyone there uses the fonts.
+// Users are counted from user_fonts: switched on themselves or installed for
+// them by a collection.
 const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable, l.lease_days,
-	l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
+	l.count_admins, l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
 	(SELECT COUNT(DISTINCT f.family) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
-	(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
-	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256 WHERE f.license_id = l.id),
+	(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id JOIN users au ON au.id = a.user_id
+		WHERE f.license_id = l.id AND (l.count_admins = 1 OR au.is_admin = 0)),
+	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
+		JOIN devices dd ON dd.id = df.device_id JOIN users du ON du.id = dd.user_id
+		WHERE f.license_id = l.id AND (l.count_admins = 1 OR du.is_admin = 0 OR dd.platform LIKE '%-machine')),
 	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
 		JOIN devices d ON d.id = df.device_id WHERE f.license_id = l.id AND d.platform LIKE '%-machine'),
 	EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id AND a.user_id = ?)
@@ -140,7 +149,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 		l := &licenseRow{Documents: []licenseDoc{}}
 		var rights string
 		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download, &l.LeaseDays,
-			&l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
+			&l.CountAdmins, &l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
 			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Machines, &l.Holder); err != nil {
 			rows.Close()
 			return nil, err
@@ -272,12 +281,12 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 		holders := []holder{}
 		var hq string
 		if ls[0].SeatUnit == "devices" {
-			hq = `SELECT d.name, u.username, MIN(df.installed_at) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
+			hq = `SELECT d.name, u.username, MIN(df.installed_at), u.is_admin FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
 				JOIN devices d ON d.id = df.device_id JOIN users u ON u.id = d.user_id
 				WHERE f.license_id = ? GROUP BY d.id ORDER BY d.name COLLATE NOCASE`
 		} else {
 			hq = `SELECT COALESCE(NULLIF(u.display_name, ''), u.username), u.username,
-				COALESCE(MIN(act.created_at), 0) FROM user_fonts a
+				COALESCE(MIN(act.created_at), 0), u.is_admin FROM user_fonts a
 				JOIN fonts f ON f.id = a.font_id JOIN users u ON u.id = a.user_id
 				LEFT JOIN activations act ON act.user_id = a.user_id AND act.font_id = a.font_id
 				WHERE f.license_id = ? GROUP BY u.id ORDER BY 1 COLLATE NOCASE`
@@ -285,9 +294,13 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 		if rows, err := s.db.Query(hq, id); err == nil {
 			for rows.Next() {
 				var h holder
-				rows.Scan(&h.Name, &h.Extra, &h.Since)
+				var isAdmin bool
+				rows.Scan(&h.Name, &h.Extra, &h.Since, &isAdmin)
 				if h.Extra == h.Name {
 					h.Extra = ""
+				}
+				if isAdmin && !ls[0].CountAdmins {
+					h.Extra = strings.TrimPrefix(h.Extra+" · admin, takes no seat", " · ")
 				}
 				holders = append(holders, h)
 			}
@@ -308,6 +321,7 @@ type licenseReq struct {
 	Enforce     *bool     `json:"enforce"`
 	Download    *bool     `json:"downloadable"`
 	LeaseDays   *int      `json:"lease_days"`
+	CountAdmins *bool     `json:"count_admins"`
 	Reference   *string   `json:"reference"`
 	URL         *string   `json:"url"`
 	PurchasedOn *string   `json:"purchased_on"`
@@ -360,6 +374,9 @@ func (req *licenseReq) columns() (map[string]any, error) {
 			return nil, errors.New("lease_days must be between 0 and 365")
 		}
 		c["lease_days"] = *req.LeaseDays
+	}
+	if req.CountAdmins != nil {
+		c["count_admins"] = boolInt(*req.CountAdmins)
 	}
 	if req.Rights != nil {
 		var keep []string
@@ -837,7 +854,9 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 	if len(fontIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.Query(`SELECT f.id, l.id, l.name, l.seats, l.seat_unit, l.expires_on,
+	var isAdmin bool
+	s.db.QueryRow(`SELECT is_admin FROM users WHERE id = ?`, userID).Scan(&isAdmin)
+	rows, err := s.db.Query(`SELECT f.id, l.id, l.name, l.seats, l.seat_unit, l.expires_on, l.count_admins,
 		EXISTS(SELECT 1 FROM user_fonts a WHERE a.font_id = f.id AND a.user_id = ?)
 		FROM fonts f JOIN licenses l ON l.id = f.license_id
 		WHERE l.enforce = 1 AND f.id IN (`+placeholders(len(fontIDs))+`)`, append([]any{userID}, int64Args(fontIDs)...)...)
@@ -848,6 +867,7 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 	type lic struct {
 		name, unit, expires string
 		seats               int
+		countAdmins         bool
 		fonts               []int64
 	}
 	lics := map[int64]*lic{}
@@ -856,9 +876,9 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 		var fid, lid int64
 		var l lic
 		var already bool
-		rows.Scan(&fid, &lid, &l.name, &l.seats, &l.unit, &l.expires, &already)
-		if already {
-			continue
+		rows.Scan(&fid, &lid, &l.name, &l.seats, &l.unit, &l.expires, &l.countAdmins, &already)
+		if already || (isAdmin && !l.countAdmins) {
+			continue // already active, or an admin this license does not count
 		}
 		if lics[lid] == nil {
 			lics[lid] = &l
@@ -879,8 +899,9 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 			var holder bool
 			var used int
 			s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1 AND a.user_id = ?2),
-				(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1)`,
-				lid, userID).Scan(&holder, &used)
+				(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id JOIN users au ON au.id = a.user_id
+					WHERE f.license_id = ?1 AND (?3 OR au.is_admin = 0))`,
+				lid, userID, l.countAdmins).Scan(&holder, &used)
 			if !holder && used >= l.seats {
 				reason = fmt.Sprintf("all %d seats of the license “%s” are in use", l.seats, l.name)
 			}
@@ -900,28 +921,31 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 // ended, and for per-device licenses only on devices that already hold a
 // seat or while seats are free.
 type deviceLicenseGate struct {
-	s       *Server
-	device  int64
-	machine bool // installs for all users of the computer
-	user    int64
-	nowT    time.Time
-	holders map[int64]map[int64]bool
-	people  map[int64]map[int64]bool // per-user licenses: who holds a seat
+	s          *Server
+	device     int64
+	machine    bool // installs for all users of the computer
+	user       int64
+	ownerAdmin bool // the device belongs to an administrator and is not an all-users computer
+	nowT       time.Time
+	holders    map[int64]map[int64]bool
+	people     map[int64]map[int64]bool // per-user licenses: who holds a seat
 }
 
 // seatHolders decides who holds the seats of an enforced per-user license
 // when more people would use it than it has seats (e.g. a group grew after
 // a collection was set to install automatically): people who switched the
 // font on themselves first, in order, then the others by account age.
-func (g *deviceLicenseGate) seatHolders(lid int64, seats int) map[int64]bool {
+// Administrators take no seat when the license doesn't count them.
+func (g *deviceLicenseGate) seatHolders(lid int64, seats int, countAdmins bool) map[int64]bool {
 	if h, ok := g.people[lid]; ok {
 		return h
 	}
 	h := map[int64]bool{}
 	rows, err := g.s.db.Query(`SELECT uf.user_id FROM user_fonts uf JOIN fonts f ON f.id = uf.font_id
+		JOIN users u ON u.id = uf.user_id
 		LEFT JOIN activations a ON a.user_id = uf.user_id AND a.font_id = uf.font_id
-		WHERE f.license_id = ? GROUP BY uf.user_id
-		ORDER BY COALESCE(MIN(a.created_at), 9223372036854775807), uf.user_id LIMIT ?`, lid, seats)
+		WHERE f.license_id = ? AND (? OR u.is_admin = 0) GROUP BY uf.user_id
+		ORDER BY COALESCE(MIN(a.created_at), 9223372036854775807), uf.user_id LIMIT ?`, lid, countAdmins, seats)
 	if err == nil {
 		for rows.Next() {
 			var u int64
@@ -934,8 +958,8 @@ func (g *deviceLicenseGate) seatHolders(lid int64, seats int) map[int64]bool {
 	return h
 }
 
-func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, unit, expires string) bool {
-	if !lid.Valid || !enforce {
+func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, unit, expires string, countAdmins bool) bool {
+	if !lid.Valid || !enforce || (g.ownerAdmin && !countAdmins) {
 		return true
 	}
 	if expired, _ := expiry(expires, g.nowT); expired {
@@ -950,13 +974,14 @@ func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, un
 			// seats can't be kept there
 			return false
 		}
-		return g.seatHolders(lid.Int64, seats)[g.user]
+		return g.seatHolders(lid.Int64, seats, countAdmins)[g.user]
 	}
 	h := g.holders[lid.Int64]
 	if h == nil {
 		h = map[int64]bool{}
 		rows, err := g.s.db.Query(`SELECT DISTINCT df.device_id FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
-			WHERE f.license_id = ?`, lid.Int64)
+			JOIN devices d ON d.id = df.device_id JOIN users u ON u.id = d.user_id
+			WHERE f.license_id = ? AND (? OR u.is_admin = 0 OR d.platform LIKE '%-machine')`, lid.Int64, countAdmins)
 		if err == nil {
 			for rows.Next() {
 				var d int64
@@ -1005,7 +1030,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Peak (12 months)", "Status", "Enforced",
-		"Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Terms URL", "Documents"})
+		"Admins counted", "Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
 		if l.Seats > 0 {
@@ -1024,7 +1049,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 			peak = l.PeakDevices
 		}
 		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used), strconv.Itoa(peak),
-			l.status(), enforced, yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
+			l.status(), enforced, yesNo(l.CountAdmins), yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
 			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), l.URL, strings.Join(docs, "; ")})
 	}
 	if unassigned > 0 {

@@ -119,6 +119,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	if err := s.bootstrapAdmin(); err != nil {
 		return nil, err
 	}
+	s.refreshFamilyNames()
 	if cfg.OIDCIssuer != "" {
 		if cfg.BaseURL == "" {
 			return nil, errors.New("TYPEHAUS_BASE_URL is required when OIDC is enabled")
@@ -233,6 +234,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/fonts/{id}/file", s.user(s.handleFontFile))
 	mux.Handle("POST /api/fonts", s.admin(s.handleUpload))
 	mux.Handle("PATCH /api/fonts", s.admin(s.handleBulkUpdateFonts))
+	mux.Handle("POST /api/fonts/family", s.admin(s.handleSetFamily))
+	mux.Handle("POST /api/fonts/replace", s.admin(s.handleReplaceFonts))
 	mux.Handle("DELETE /api/fonts", s.admin(s.handleDeleteFonts))
 
 	// activation
@@ -273,6 +276,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/licenses/{id}/history", s.admin(s.handleLicenseHistory))
 	mux.Handle("POST /api/licenses", s.admin(s.handleCreateLicense))
 	mux.Handle("POST /api/licenses/detect", s.admin(s.handleDetectLicenses))
+	mux.Handle("GET /api/licenses/suggestions", s.admin(s.handleLicenseSuggestions))
+	mux.Handle("POST /api/licenses/suggestions", s.admin(s.handleApplyLicenseSuggestions))
 	mux.Handle("PATCH /api/licenses/{id}", s.admin(s.handleUpdateLicense))
 	mux.Handle("DELETE /api/licenses/{id}", s.admin(s.handleDeleteLicense))
 	mux.Handle("POST /api/licenses/{id}/documents", s.admin(s.handleUploadLicenseDocs))

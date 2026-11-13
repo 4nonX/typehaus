@@ -40,7 +40,7 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 	args := append([]any{u.ID}, int64Args(ids)...)
 	args = append(args, vargs...)
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.full_name, f.license_text, f.license_url, f.extras,
-		l.id, COALESCE(l.name, ''), COALESCE(l.downloadable, 1), COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.expires_on, ''),
+		l.id, COALESCE(l.name, ''), COALESCE(l.downloadable, 1), COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.expires_on, ''), COALESCE(l.count_admins, 1),
 		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.license_id = l.id AND a.user_id = ?)
 		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE f.id IN (`+placeholders(len(ids))+`) AND `+where+`
@@ -56,14 +56,15 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 	for rows.Next() {
 		var f dlFont
 		var extras, licName, expires string
-		var allowDL, enforce, holder bool
+		var allowDL, enforce, countAdmins, holder bool
 		var seats int
 		if err := rows.Scan(&f.id, &f.sha, &f.filename, &f.family, &f.fullName, &f.licText, &f.licURL, &extras,
-			&f.licID, &licName, &allowDL, &enforce, &seats, &expires, &holder); err != nil {
+			&f.licID, &licName, &allowDL, &enforce, &seats, &expires, &countAdmins, &holder); err != nil {
 			return nil, nil, err
 		}
 		json.Unmarshal([]byte(extras), &f.extras)
-		if !u.IsAdmin && f.licID.Valid {
+		// admins are held to the license too, unless it says not to count them
+		if f.licID.Valid && !(u.IsAdmin && !countAdmins) {
 			l := lics[f.licID.Int64]
 			if l == nil {
 				l = &dlLicense{name: licName}

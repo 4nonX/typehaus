@@ -35,6 +35,13 @@ type Face struct {
 	Italic         bool   `json:"italic"`
 	// FSType is the OS/2 embedding permission field (0 = installable).
 	FSType uint16 `json:"fs_type"`
+	// VendorID is the OS/2 achVendID, the foundry's registered four-letter
+	// code; Trademark is name ID 7. Both help recognise commercial foundries.
+	VendorID  string `json:"vendor_id,omitempty"`
+	Trademark string `json:"trademark,omitempty"`
+	// Fingerprint identifies the font itself, independent of its file
+	// (see fingerprint); empty for formats other than TrueType/OpenType.
+	Fingerprint string `json:"-"`
 }
 
 // Info is the parsed result for a whole file.
@@ -124,10 +131,14 @@ func parseFace(b []byte, base int) (*Face, error) {
 		Designer:       names[9],
 		License:        names[13],
 		LicenseURL:     names[14],
+		Trademark:      names[7],
 		Weight:         400,
 	}
 	if f.Style == "" {
 		f.Style = "Regular"
+	}
+	if names[16] == "" {
+		f.Family, f.Style = legacyFamily(f.Family, f.Style)
 	}
 	if f.FullName == "" {
 		f.FullName = strings.TrimSpace(f.Family + " " + f.Style)
@@ -139,6 +150,7 @@ func parseFace(b []byte, base int) (*Face, error) {
 		t := b[os2.off : os2.off+os2.length]
 		f.Weight = int(be16(t, 4))
 		f.FSType = be16(t, 8)
+		f.VendorID = strings.TrimSpace(strings.Trim(string(t[58:62]), "\x00"))
 		fsSel := be16(t, 62)
 		f.Italic = fsSel&0x1 != 0 || fsSel&0x200 != 0
 	} else {
@@ -148,6 +160,7 @@ func parseFace(b []byte, base int) (*Face, error) {
 	if f.Weight < 1 || f.Weight > 1000 {
 		f.Weight = 400
 	}
+	f.Fingerprint = fingerprint(b, tables, names)
 	return f, nil
 }
 
