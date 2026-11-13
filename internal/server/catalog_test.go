@@ -134,6 +134,8 @@ func fakeUpstream(t *testing.T, s *Server, ts *httptest.Server) *atomic.Int32 {
 			saved[0], saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
 	})
 	s.cfg.Catalog, s.cfg.Identify, s.cfg.BaseURL = true, true, ts.URL
+	checkReachable = func(string) (string, string) { return "", "" } // the stand-ins run here
+	t.Cleanup(func() { checkReachable = privateAddress })
 	return &asposePolls
 }
 
@@ -408,5 +410,36 @@ func TestParseAspose(t *testing.T) {
 	style, fonts := parseAsposeFonts("eydzdHlsZSc6ICdyZWd1bGFyJywgJ2ZvbnQnOiBbJ3RhaG9tYScsICd0aW1lcycsICd2ZXJkYW5hJ119")
 	if style != "regular" || strings.Join(fonts, ",") != "Tahoma,Times,Verdana" {
 		t.Fatalf("%q %v", style, fonts)
+	}
+}
+
+func TestPrivateAddress(t *testing.T) {
+	for raw, private := range map[string]bool{
+		"https://typehaus.greiff.local": true,
+		"http://fonts":                  true,
+		"http://localhost:8080":         true,
+		"http://192.168.1.20:8080":      true,
+		"http://10.0.0.5":               true,
+		"http://[fd00::1]":              true,
+		"https://fonts.corp":            true,
+		"https://intranet.home.arpa":    true,
+		"https://fonts.example.com":     false,
+		"https://typehaus.markt-apo.de": false,
+		"http://203.0.113.9":            false, // documentation range, but not private
+	} {
+		_, why := privateAddress(raw)
+		if (why != "") != private {
+			t.Errorf("%s: %q", raw, why)
+		}
+	}
+}
+
+// A service answering with a web page shows a sentence, not the page source.
+func TestServiceErrHTML(t *testing.T) {
+	resp := &http.Response{StatusCode: 404, Header: http.Header{"Content-Type": {"text/html; charset=utf-8"}},
+		Body: io.NopCloser(strings.NewReader(`<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/></head></html>`))}
+	err := serviceErr("Mixfont", resp)
+	if strings.Contains(err.Error(), "<") || !strings.Contains(err.Error(), "web page") {
+		t.Fatalf("%v", err)
 	}
 }

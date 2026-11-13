@@ -14,6 +14,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 ### Changed
 - The font list a computer receives now carries each font's PostScript name and the server's setting for fonts already on the computer; computers report the fonts they left out. Older apps ignore both and keep working.
 
+### Fixed
+- **Identify a font:** on a server with an internal address (such as `typehaus.example.local`, a name without a domain, or a private IP), Mixfont is now skipped with an explanation instead of failing. Mixfont fetches uploaded images from a temporary link on the server, which it can't reach there; pasting a link to an image on the web still works. A service that answers with a web page instead of its API now gets a short explanation instead of the page's HTML.
+
 ## [1.0.0] - 2026-11-13
 
 typehaus 1.0: the API is stable – everything under `/api/v1` changes only compatibly from here on. New in this release: the API with webhooks, panels for InDesign, Photoshop and Illustrator, Affinity support, free fonts and font identification, and web fonts for your websites.

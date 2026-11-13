@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -248,9 +249,47 @@ type skipped string
 func (s skipped) Error() string { return string(s) }
 
 // serviceErr turns an upstream error response into a short message.
+// checkReachable is privateAddress; tests whose stand-in services run on
+// this machine replace it.
+var checkReachable = privateAddress
+
+// privateAddress reports why an outside service can't reach a URL's host:
+// a name or address only meaningful inside a network. "" if it may be
+// reachable (a public-looking name is given the benefit of the doubt).
+func privateAddress(raw string) (string, string) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return raw, "isn't a valid address"
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return host, "is a private network address"
+		}
+		return "", ""
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return host, "is this computer only"
+	}
+	if !strings.Contains(host, ".") {
+		return host, "is a local name without a domain"
+	}
+	for _, suf := range []string{".local", ".lan", ".internal", ".intranet", ".home", ".home.arpa", ".corp", ".localdomain", ".private", ".test", ".invalid", ".example"} {
+		if strings.HasSuffix(host, suf) {
+			return host, "only exists inside your network"
+		}
+	}
+	return "", ""
+}
+
 func serviceErr(name string, resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	msg := strings.TrimSpace(string(b))
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/html") || strings.HasPrefix(strings.ToLower(msg), "<!doctype") || strings.HasPrefix(strings.ToLower(msg), "<html") {
+		// a web page, not an API answer: say so instead of showing its source
+		msg = "(answered with a web page instead of the API – the service may be down or its address may have changed; for Mixfont, it also happens when it can't fetch the image)"
+	}
 	var j map[string]any
 	if json.Unmarshal(b, &j) == nil {
 		for _, k := range []string{"message", "error", "detail"} {
@@ -332,6 +371,9 @@ func (s *Server) identifyMixfont(ctx context.Context, in *identifyInput, res *id
 	if imgURL == "" {
 		if in.baseURL == "" {
 			return skipped("Mixfont needs a link to the image: paste an image link, or set TYPEHAUS_BASE_URL to an address Mixfont can reach")
+		}
+		if host, why := checkReachable(in.baseURL); why != "" {
+			return skipped(fmt.Sprintf("Mixfont fetches the image itself, from the internet – and this server's address (%s) %s. Paste a link to an image on the web instead.", host, why))
 		}
 		tok := make([]byte, 24)
 		rand.Read(tok)
