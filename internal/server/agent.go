@@ -202,7 +202,7 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	// newest first, so the duplicate filter below keeps the newest upload
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name,
 		f.kind, f.platforms, f.extras, l.id, COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.seat_unit, ''), COALESCE(l.expires_on, '')
-		FROM fonts f JOIN activations a ON a.font_id = f.id AND a.user_id = ?
+		FROM fonts f JOIN user_fonts a ON a.font_id = f.id AND a.user_id = ?
 		LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE `+where+` ORDER BY f.id DESC`, args...)
 	if err != nil {
@@ -214,7 +214,8 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	psSeen := map[string]bool{}
 	var gate *deviceLicenseGate
 	if d != nil {
-		gate = &deviceLicenseGate{s: s, device: d.ID, nowT: time.Now(), holders: map[int64]map[int64]bool{}}
+		gate = &deviceLicenseGate{s: s, device: d.ID, user: d.UserID, nowT: time.Now(),
+			holders: map[int64]map[int64]bool{}, people: map[int64]map[int64]bool{}}
 	}
 	type row struct {
 		m                     protocol.ManifestFont

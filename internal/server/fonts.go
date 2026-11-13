@@ -33,30 +33,32 @@ func visibleClause(u *authUser) (string, []any) {
 }
 
 type fontRow struct {
-	ID             int64   `json:"id"`
-	SHA256         string  `json:"sha256"`
-	FaceIndex      int     `json:"face_index"`
-	Filename       string  `json:"filename"`
-	Format         string  `json:"format"`
-	Size           int64   `json:"size"`
-	Family         string  `json:"family"`
-	Style          string  `json:"style"`
-	FullName       string  `json:"full_name"`
-	PostScriptName string  `json:"postscript_name"`
-	Version        string  `json:"version"`
-	Designer       string  `json:"designer"`
-	Manufacturer   string  `json:"manufacturer"`
-	Weight         int     `json:"weight"`
-	Italic         bool    `json:"italic"`
-	FSType         int     `json:"fs_type"`
-	LicenseID      *int64  `json:"license_id"`
-	Activated      bool    `json:"activated"`
-	Conflict       bool    `json:"conflict"`      // another file in the library has the same PostScript name
-	Kind           string  `json:"kind"`          // sfnt, type1, winfnt, pcf, bdf
-	Platforms      string  `json:"platforms"`     // "" = all, else comma list
-	SourceFormat   string  `json:"source_format"` // original format when converted
-	Collections    []int64 `json:"collections"`
-	CreatedAt      int64   `json:"created_at"`
+	ID             int64    `json:"id"`
+	SHA256         string   `json:"sha256"`
+	FaceIndex      int      `json:"face_index"`
+	Filename       string   `json:"filename"`
+	Format         string   `json:"format"`
+	Size           int64    `json:"size"`
+	Family         string   `json:"family"`
+	Style          string   `json:"style"`
+	FullName       string   `json:"full_name"`
+	PostScriptName string   `json:"postscript_name"`
+	Version        string   `json:"version"`
+	Designer       string   `json:"designer"`
+	Manufacturer   string   `json:"manufacturer"`
+	Weight         int      `json:"weight"`
+	Italic         bool     `json:"italic"`
+	FSType         int      `json:"fs_type"`
+	LicenseID      *int64   `json:"license_id"`
+	Activated      bool     `json:"activated"`     // switched on by the user
+	Required       bool     `json:"required"`      // installed by a collection; can't be switched off
+	RequiredBy     []string `json:"required_by"`   // those collections
+	Conflict       bool     `json:"conflict"`      // another file in the library has the same PostScript name
+	Kind           string   `json:"kind"`          // sfnt, type1, winfnt, pcf, bdf
+	Platforms      string   `json:"platforms"`     // "" = all, else comma list
+	SourceFormat   string   `json:"source_format"` // original format when converted
+	Collections    []int64  `json:"collections"`
+	CreatedAt      int64    `json:"created_at"`
 }
 
 const fontCols = `f.id, f.sha256, f.face_index, f.filename, f.format, f.size, f.family, f.style, f.full_name,
@@ -89,7 +91,7 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		args = append(args, c)
 	}
 	if r.URL.Query().Get("activated") == "1" {
-		q += ` AND f.id IN (SELECT font_id FROM activations WHERE user_id = ?)`
+		q += ` AND f.id IN (SELECT font_id FROM user_fonts WHERE user_id = ?)`
 		args = append(args, u.ID)
 	}
 	q += ` ORDER BY f.family COLLATE NOCASE, f.italic, f.weight, f.style`
@@ -101,7 +103,7 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 	out := []*fontRow{}
 	byID := map[int64]*fontRow{}
 	for rows.Next() {
-		f := &fontRow{Collections: []int64{}}
+		f := &fontRow{Collections: []int64{}, RequiredBy: []string{}}
 		var lic sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 			&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
@@ -117,6 +119,19 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		byID[f.ID] = f
 	}
 	rows.Close()
+	if rr, err := s.db.Query(`SELECT rf.font_id, c.name FROM required_fonts rf JOIN collections c ON c.id = rf.collection_id
+		WHERE rf.user_id = ? ORDER BY c.name COLLATE NOCASE`, u.ID); err == nil {
+		for rr.Next() {
+			var fid int64
+			var name string
+			rr.Scan(&fid, &name)
+			if f := byID[fid]; f != nil {
+				f.Required = true
+				f.RequiredBy = append(f.RequiredBy, name)
+			}
+		}
+		rr.Close()
+	}
 	cr, err := s.db.Query(`SELECT collection_id, font_id FROM collection_fonts`)
 	if err == nil {
 		for cr.Next() {
@@ -704,7 +719,15 @@ func (s *Server) handleDeactivate(w http.ResponseWriter, r *http.Request, u *aut
 	if n > 0 {
 		s.audit(u, "font.deactivate", "%d font(s)", n)
 	}
-	writeJSON(w, 200, map[string]int64{"deactivated": n})
+	// fonts the organisation installs stay, whatever the user switched off
+	var kept int64
+	if req.All {
+		s.db.QueryRow(`SELECT COUNT(DISTINCT font_id) FROM required_fonts WHERE user_id = ?`, u.ID).Scan(&kept)
+	} else if len(req.FontIDs) > 0 {
+		s.db.QueryRow(`SELECT COUNT(DISTINCT font_id) FROM required_fonts WHERE user_id = ? AND font_id IN (`+placeholders(len(req.FontIDs))+`)`,
+			append([]any{u.ID}, int64Args(req.FontIDs)...)...).Scan(&kept)
+	}
+	writeJSON(w, 200, map[string]int64{"deactivated": n, "kept": kept})
 }
 
 // resolveConflicts keeps at most one active font per PostScript name for a

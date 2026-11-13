@@ -236,6 +236,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/collections", s.user(s.handleListCollections))
 	mux.Handle("POST /api/collections", s.admin(s.handleCreateCollection))
 	mux.Handle("PATCH /api/collections/{id}", s.admin(s.handleUpdateCollection))
+	mux.Handle("POST /api/collections/impact", s.admin(s.handleCollectionImpact))
 	mux.Handle("DELETE /api/collections/{id}", s.admin(s.handleDeleteCollection))
 	mux.Handle("POST /api/collections/{id}/fonts", s.admin(s.handleCollectionAddFonts))
 	mux.Handle("DELETE /api/collections/{id}/fonts", s.admin(s.handleCollectionRemoveFonts))

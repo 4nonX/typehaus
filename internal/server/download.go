@@ -41,7 +41,7 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 	args = append(args, vargs...)
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.full_name, f.license_text, f.license_url, f.extras,
 		l.id, COALESCE(l.name, ''), COALESCE(l.downloadable, 1), COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.expires_on, ''),
-		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM activations a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.license_id = l.id AND a.user_id = ?)
+		l.id IS NOT NULL AND EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.license_id = l.id AND a.user_id = ?)
 		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE f.id IN (`+placeholders(len(ids))+`) AND `+where+`
 		ORDER BY f.family COLLATE NOCASE, f.italic, f.weight, f.style`, args...)

@@ -245,3 +245,18 @@ details.cli summary { cursor: pointer; color: var(--ink-2); margin-bottom: 10px;
 details.otherdl { flex-basis: 100%; margin-top: 4px; }
 details.otherdl summary { cursor: pointer; color: var(--ink-2); }
 details.otherdl ul { margin: 6px 0; padding-left: 18px; line-height: 1.8; }
+
+/* ---- distribution ---- */
+.badge.inst { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: transparent; }
+.toggle.locked { opacity: .55; cursor: not-allowed; }
+.toggle.locked input { cursor: not-allowed; }
+.modes { display: grid; gap: 8px; }
+.mode { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; }
+.mode:has(input:checked) { border-color: var(--ink); }
+.mode > span { display: grid; gap: 2px; }
+.mode input { margin-top: 3px; }
+.impact { border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 8px; font-size: 13px; }
+.impact.ok { border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.impact.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.impact.bad { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.impact table { margin: 0; }

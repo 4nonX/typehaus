@@ -169,6 +169,25 @@ CREATE INDEX fonts_license ON fonts(license_id);
 `,
 	// 5: whether a license allows downloading the font files directly
 	`ALTER TABLE licenses ADD COLUMN downloadable INTEGER NOT NULL DEFAULT 1;`,
+	// 6: collections the organisation installs automatically. required_fonts
+	// lists what each user gets that way; user_fonts is everything a user
+	// has – switched on themselves or installed for them – and is what seat
+	// counting, reports and the agents' manifests use.
+	`
+ALTER TABLE collections ADD COLUMN mode TEXT NOT NULL DEFAULT 'available';
+CREATE VIEW required_fonts AS
+	SELECT DISTINCT u.id AS user_id, cf.font_id AS font_id, c.id AS collection_id
+	FROM collections c
+	JOIN collection_fonts cf ON cf.collection_id = c.id
+	JOIN users u ON u.disabled = 0 AND (c.everyone = 1 OR EXISTS (
+		SELECT 1 FROM collection_groups cg JOIN user_groups ug ON ug.group_id = cg.group_id
+		WHERE cg.collection_id = c.id AND ug.user_id = u.id))
+	WHERE c.mode = 'installed';
+CREATE VIEW user_fonts AS
+	SELECT user_id, font_id FROM activations
+	UNION
+	SELECT user_id, font_id FROM required_fonts;
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

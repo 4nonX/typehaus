@@ -101,9 +101,9 @@ const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, 
 	l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
 	(SELECT COUNT(DISTINCT f.family) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
-	(SELECT COUNT(DISTINCT a.user_id) FROM activations a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
+	(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
 	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256 WHERE f.license_id = l.id),
-	EXISTS(SELECT 1 FROM activations a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id AND a.user_id = ?)
+	EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id AND a.user_id = ?)
 	FROM licenses l`
 
 func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licenseRow, error) {
@@ -251,8 +251,10 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 				JOIN devices d ON d.id = df.device_id JOIN users u ON u.id = d.user_id
 				WHERE f.license_id = ? GROUP BY d.id ORDER BY d.name COLLATE NOCASE`
 		} else {
-			hq = `SELECT COALESCE(NULLIF(u.display_name, ''), u.username), u.username, MIN(a.created_at) FROM activations a
+			hq = `SELECT COALESCE(NULLIF(u.display_name, ''), u.username), u.username,
+				COALESCE(MIN(act.created_at), 0) FROM user_fonts a
 				JOIN fonts f ON f.id = a.font_id JOIN users u ON u.id = a.user_id
+				LEFT JOIN activations act ON act.user_id = a.user_id AND act.font_id = a.font_id
 				WHERE f.license_id = ? GROUP BY u.id ORDER BY 1 COLLATE NOCASE`
 		}
 		if rows, err := s.db.Query(hq, id); err == nil {
@@ -799,7 +801,7 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 		return nil, nil
 	}
 	rows, err := s.db.Query(`SELECT f.id, l.id, l.name, l.seats, l.seat_unit, l.expires_on,
-		EXISTS(SELECT 1 FROM activations a WHERE a.font_id = f.id AND a.user_id = ?)
+		EXISTS(SELECT 1 FROM user_fonts a WHERE a.font_id = f.id AND a.user_id = ?)
 		FROM fonts f JOIN licenses l ON l.id = f.license_id
 		WHERE l.enforce = 1 AND f.id IN (`+placeholders(len(fontIDs))+`)`, append([]any{userID}, int64Args(fontIDs)...)...)
 	if err != nil {
@@ -839,8 +841,8 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 		} else if l.unit == "users" && l.seats > 0 {
 			var holder bool
 			var used int
-			s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM activations a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1 AND a.user_id = ?2),
-				(SELECT COUNT(DISTINCT a.user_id) FROM activations a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1)`,
+			s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1 AND a.user_id = ?2),
+				(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = ?1)`,
 				lid, userID).Scan(&holder, &used)
 			if !holder && used >= l.seats {
 				reason = fmt.Sprintf("all %d seats of the license “%s” are in use", l.seats, l.name)
@@ -863,8 +865,35 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 type deviceLicenseGate struct {
 	s       *Server
 	device  int64
+	user    int64
 	nowT    time.Time
 	holders map[int64]map[int64]bool
+	people  map[int64]map[int64]bool // per-user licenses: who holds a seat
+}
+
+// seatHolders decides who holds the seats of an enforced per-user license
+// when more people would use it than it has seats (e.g. a group grew after
+// a collection was set to install automatically): people who switched the
+// font on themselves first, in order, then the others by account age.
+func (g *deviceLicenseGate) seatHolders(lid int64, seats int) map[int64]bool {
+	if h, ok := g.people[lid]; ok {
+		return h
+	}
+	h := map[int64]bool{}
+	rows, err := g.s.db.Query(`SELECT uf.user_id FROM user_fonts uf JOIN fonts f ON f.id = uf.font_id
+		LEFT JOIN activations a ON a.user_id = uf.user_id AND a.font_id = uf.font_id
+		WHERE f.license_id = ? GROUP BY uf.user_id
+		ORDER BY COALESCE(MIN(a.created_at), 9223372036854775807), uf.user_id LIMIT ?`, lid, seats)
+	if err == nil {
+		for rows.Next() {
+			var u int64
+			rows.Scan(&u)
+			h[u] = true
+		}
+		rows.Close()
+	}
+	g.people[lid] = h
+	return h
 }
 
 func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, unit, expires string) bool {
@@ -874,8 +903,11 @@ func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, un
 	if expired, _ := expiry(expires, g.nowT); expired {
 		return false
 	}
-	if unit != "devices" || seats <= 0 {
+	if seats <= 0 {
 		return true
+	}
+	if unit != "devices" {
+		return g.seatHolders(lid.Int64, seats)[g.user]
 	}
 	h := g.holders[lid.Int64]
 	if h == nil {
@@ -911,7 +943,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	holders := map[int64][]string{}
-	if rows, err := s.db.Query(`SELECT DISTINCT f.license_id, u.username FROM activations a JOIN fonts f ON f.id = a.font_id
+	if rows, err := s.db.Query(`SELECT DISTINCT f.license_id, u.username FROM user_fonts a JOIN fonts f ON f.id = a.font_id
 		JOIN users u ON u.id = a.user_id WHERE f.license_id IS NOT NULL ORDER BY u.username COLLATE NOCASE`); err == nil {
 		for rows.Next() {
 			var lid int64

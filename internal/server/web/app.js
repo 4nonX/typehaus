@@ -251,7 +251,7 @@ function groupFamilies(fonts) {
   }
   return [...m.entries()].map(([name, faces]) => {
     const rep = [...faces].sort((a, b) => (a.italic - b.italic) || (Math.abs(a.weight - 400) - Math.abs(b.weight - 400)))[0];
-    return { name, faces, rep, active: faces.filter((f) => f.activated).length };
+    return { name, faces, rep, active: faces.filter(isOn).length, required: faces.filter((f) => f.required).length };
   });
 }
 
@@ -259,7 +259,7 @@ function filteredFonts() {
   const L = S.lib;
   const q = L.q.trim().toLowerCase();
   return L.fonts.filter((f) => {
-    if (L.coll === 'active' && !f.activated) return false;
+    if (L.coll === 'active' && !isOn(f)) return false;
     if (L.coll !== 'all' && L.coll !== 'active' && !f.collections.includes(+L.coll)) return false;
     if (q && !(`${f.family} ${f.full_name} ${f.postscript_name} ${f.designer} ${f.manufacturer}`.toLowerCase().includes(q))) return false;
     return true;
@@ -273,7 +273,7 @@ async function renderLibrary(page) {
     await loadLibrary();
   }
   const isAdmin = S.me.is_admin;
-  const activeCount = L.fonts.filter((f) => f.activated).length;
+  const activeCount = L.fonts.filter(isOn).length;
   page.innerHTML = `
     <div class="lib">
       <aside class="side">
@@ -345,9 +345,11 @@ function drawFamilies() {
     return `<div class="family" data-fam="${esc(fam.name)}">
       <div class="family-head">
         ${admin ? `<input type="checkbox" class="selfam" ${allSel ? 'checked' : ''} title="Select family">` : ''}
-        <label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>
+        ${fam.required === fam.faces.length
+          ? `<label class="toggle locked" title="${esc(requiredTitle(fam.faces[0]))}"><input type="checkbox" checked disabled><span></span></label>`
+          : `<label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>`}
         <span class="name">${esc(fam.name)}</span>
-        <span class="meta">${plural(fam.faces.length, 'style')}${fam.active ? ` · <span class="badge on">${fam.active} active</span>` : ''}${lic ? ` · ${licenseBadge(lic)}` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
+        <span class="meta">${plural(fam.faces.length, 'style')}${fam.required ? ` · <span class="badge inst" title="${esc(requiredTitle(fam.faces.find((f) => f.required)))}">installed by ${esc(fam.faces.find((f) => f.required).required_by.join(', '))}</span>` : ''}${fam.active > fam.required ? ` · <span class="badge on">${fam.active - fam.required} active</span>` : ''}${lic ? ` · ${licenseBadge(lic)}` : ''}${restricted ? ' · <span class="badge warn" title="OS/2 fsType: restricted license embedding">restricted</span>' : ''}${conflict ? ' · <span class="badge warn" title="Another file in the library has the same PostScript name (e.g. another version). Only one of them can be active at a time – activating one switches the other off.">duplicate name</span>' : ''}${kinds.map((k) => ` · <span class="badge">${KIND_LABEL[k] || esc(k)}</span>`).join('')}${plats.map((p) => ` · <span class="badge warn" title="Only installed on computers running ${esc(platformNames(p))}">${esc(platformNames(p))} only</span>`).join('')}</span>
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand info" title="Details and license">Info</button>
@@ -361,7 +363,9 @@ function drawFamilies() {
           <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${esc(f.style)} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
           <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
           ${S.me.downloads ? `<button class="iconbtn dlface" title="Download ${esc(f.style)}" aria-label="Download ${esc(f.full_name)}">↓</button>` : '<span></span>'}
-          <label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>
+          ${f.required
+            ? `<label class="toggle locked" title="${esc(requiredTitle(f))}"><input type="checkbox" checked disabled><span></span></label>`
+            : `<label class="toggle"><input type="checkbox" class="actface" ${f.activated ? 'checked' : ''}><span></span></label>`}
         </div>`).join('')}</div>` : ''}
     </div>`;
   }).join('') + (fams.length > L.shown ? `<div class="more" id="more">Showing ${L.shown} of ${fams.length} families…</div>` : '');
@@ -377,7 +381,8 @@ function drawFamilies() {
   $$('.actfam', box).forEach((cb) => {
     const fam = fams.find((x) => x.name === cb.closest('.family').dataset.fam);
     cb.indeterminate = fam.active > 0 && fam.active < fam.faces.length;
-    cb.onchange = () => setActive(fam.faces.map((f) => f.id), fam.active < fam.faces.length);
+    // only the styles the user can switch themselves
+    cb.onchange = () => setActive(fam.faces.filter((f) => !f.required).map((f) => f.id), fam.active < fam.faces.length);
   });
   $$('.actface', box).forEach((cb) => cb.onchange = () => setActive([+cb.closest('.style-row').dataset.id], cb.checked));
   $$('.info', box).forEach((b) => b.onclick = () => familyInfo(fams.find((x) => x.name === b.closest('.family').dataset.fam)));
@@ -402,10 +407,15 @@ function drawFamilies() {
   drawBulk();
 }
 
+// on: switched on by the user, or installed by the organisation
+const isOn = (f) => f.activated || f.required;
+const requiredTitle = (f) => `Installed for you by your organisation (collection ${f.required_by.join(', ')}). It can't be switched off here.`;
+
 async function setActive(ids, on) {
   try {
     const r = await api(on ? 'POST' : 'DELETE', '/api/activations', { font_ids: ids });
     toast(on ? `Activated ${plural(ids.length, 'style')} – your devices sync shortly` : `Deactivated ${plural(ids.length, 'style')}`);
+    if (!on && r.kept) toast(`${plural(r.kept, 'style')} stay installed – your organisation installs them for you`);
     if (on && r.replaced) toast(`${plural(r.replaced, 'style')} with the same name switched off – only one version can be active`);
     if (on && r.refused?.length) toast(`Some styles were not activated: ${r.refused.join('; ')}`, true);
     S.lib.loaded = false; // reload: conflicts may have switched other fonts off
@@ -701,34 +711,82 @@ async function renderCollections(page) {
   const [colls, groups] = await Promise.all([api('GET', '/api/collections'), api('GET', '/api/groups')]);
   const gname = (id) => groups.find((g) => g.id === id)?.name || '?';
   page.innerHTML = `
-    <div class="row"><div><h1>Collections</h1><p class="sub">Collections decide who can see and activate which fonts. Add fonts to collections from the Library.</p></div>
+    <div class="row"><div><h1>Collections</h1><p class="sub">Collections decide who gets which fonts: <b>available</b> to switch on when needed, or <b>installed automatically</b> on every computer of the people they apply to. Add fonts to collections from the Library.</p></div>
       <span class="spacer"></span><button class="btn primary" id="new">New collection</button></div>
-    ${colls.length ? `<table class="t"><thead><tr><th>Name</th><th>Access</th><th class="num">Styles</th><th></th></tr></thead><tbody>
+    ${colls.length ? `<table class="t"><thead><tr><th>Name</th><th>For</th><th>Distribution</th><th class="num">Styles</th><th></th></tr></thead><tbody>
       ${colls.map((c) => `<tr><td><b>${esc(c.name)}</b>${c.description ? `<div class="small muted">${esc(c.description)}</div>` : ''}</td>
-        <td>${c.everyone ? '<span class="badge on">Everyone</span>' : (c.group_ids.length ? c.group_ids.map((g) => `<span class="badge">${esc(gname(g))}</span>`).join(' ') : '<span class="muted small">Admins only</span>')}</td>
+        <td>${c.everyone ? '<span class="badge on">Everyone</span>' : (c.group_ids.length ? c.group_ids.map((g) => `<span class="badge">${esc(gname(g))}</span>`).join(' ') : '<span class="muted small">Admins only</span>')}
+          <div class="small muted">${plural(c.members, 'person', 'people')}</div></td>
+        <td>${c.mode === 'installed' ? '<span class="badge inst">Installed automatically</span>' : '<span class="muted small">Available</span>'}</td>
         <td class="num"><a href="#/library" data-open="${c.id}">${c.font_count}</a></td>
-        <td style="text-align:right"><button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button></td></tr>`).join('')}
+        <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button></td></tr>`).join('')}
       </tbody></table>` : '<div class="empty"><div class="big">No collections yet.</div>Create one to share fonts with your team.</div>'}`;
-  const edit = (c) => dialog(c ? 'Edit collection' : 'New collection', `
+
+  const edit = (c) => {
+    const d = dialog(c ? `Edit ${c.name}` : 'New collection', `
     <label class="field">Name<input type="text" name="name" required value="${esc(c?.name)}"></label>
     <label class="field">Description<input type="text" name="description" value="${esc(c?.description)}"></label>
-    <label class="check"><input type="checkbox" name="everyone" ${c?.everyone ? 'checked' : ''}> Visible to everyone</label>
-    <div class="field small">Or only to these groups${groups.length ? '' : ' <span class="muted">(create groups under People)</span>'}
-      <div class="checks">${groups.map((g) => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${c?.group_ids.includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<span class="muted">No groups</span>'}</div></div>`,
-  {
-    onSubmit: async (fd) => {
-      const body = { name: fd.get('name'), description: fd.get('description'), everyone: fd.get('everyone') === 'on', group_ids: fd.getAll('g').map(Number) };
-      if (c) await api('PATCH', `/api/collections/${c.id}`, body); else await api('POST', '/api/collections', body);
-      S.lib.loaded = false;
-      renderCollections(page);
-    },
-  });
+    <fieldset class="field"><legend>For whom</legend>
+      <label class="check"><input type="checkbox" name="everyone" ${c?.everyone ? 'checked' : ''}> Everyone</label>
+      <div class="small">Or these groups${groups.length ? '' : ' <span class="muted">(create groups under People)</span>'}
+        <div class="checks">${groups.map((g) => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${c?.group_ids.includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<span class="muted">No groups</span>'}</div></div>
+    </fieldset>
+    <fieldset class="field"><legend>Distribution</legend>
+      <div class="modes">
+        <label class="mode"><input type="radio" name="mode" value="available" ${c?.mode !== 'installed' ? 'checked' : ''}>
+          <span><b>Available</b><span class="small muted">People see these fonts in the library and switch on what they need.</span></span></label>
+        <label class="mode"><input type="radio" name="mode" value="installed" ${c?.mode === 'installed' ? 'checked' : ''}>
+          <span><b>Installed automatically</b><span class="small muted">Installed on every computer of these people, without them doing anything. They can't switch them off. Joining or leaving a group adds or removes them.</span></span></label>
+      </div>
+    </fieldset>
+    <div class="impact" hidden></div>`,
+    {
+      onSubmit: async (fd) => {
+        const body = { name: fd.get('name'), description: fd.get('description'), everyone: fd.get('everyone') === 'on',
+          group_ids: fd.getAll('g').map(Number), mode: fd.get('mode') };
+        if (c) await api('PATCH', `/api/collections/${c.id}`, body); else await api('POST', '/api/collections', body);
+        S.lib.loaded = false;
+        renderCollections(page);
+      },
+    });
+    // live preview of what automatic installation means for seats
+    const box = $('.impact', d);
+    const submit = $('[type=submit]', d);
+    let seq = 0;
+    const check = async () => {
+      const fd = new FormData($('form', d));
+      const mode = fd.get('mode');
+      if (mode !== 'installed') { box.hidden = true; submit.disabled = false; return; }
+      const my = ++seq;
+      let r;
+      try {
+        r = await api('POST', '/api/collections/impact', { id: c?.id || 0, mode, everyone: fd.get('everyone') === 'on', group_ids: fd.getAll('g').map(Number) });
+      } catch (e) { return; }
+      if (my !== seq) return;
+      const blocked = r.licenses.filter((l) => l.enforce && l.over);
+      const over = r.licenses.filter((l) => !l.enforce && l.over);
+      box.hidden = false;
+      box.className = 'impact ' + (blocked.length ? 'bad' : over.length || r.unlicensed_families ? 'warn' : 'ok');
+      box.innerHTML = `<div><b>${c ? plural(r.fonts, 'style') : 'The fonts you add'}</b> will be installed for <b>${plural(r.members, 'person', 'people')}</b>${r.devices ? ` on ${plural(r.devices, 'computer')} so far` : ''}.</div>
+        ${r.licenses.length ? `<table class="t small"><thead><tr><th>License</th><th class="num">Seats</th><th class="num">In use now</th><th class="num">After</th><th></th></tr></thead><tbody>
+          ${r.licenses.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.seats || '∞'} <span class="muted">${l.unit}</span></td><td class="num">${l.now}</td><td class="num"><b>${l.after}</b></td>
+            <td>${l.over ? (l.enforce ? '<span class="badge danger">blocked – not enough seats</span>' : '<span class="badge warn">exceeds seats</span>') : '<span class="badge open">covered</span>'}</td></tr>`).join('')}
+        </tbody></table>` : ''}
+        ${blocked.length ? '<div>Enforced licenses don\'t have enough seats. Buy more seats, narrow the groups, or remove those fonts from the collection.</div>' : ''}
+        ${over.length ? '<div>Some licenses would be exceeded. They aren\'t enforced, so typehaus will install anyway – make sure you are covered.</div>' : ''}
+        ${r.unlicensed_families ? `<div>${plural(r.unlicensed_families, 'family', 'families')} in this collection ${r.unlicensed_families === 1 ? 'has' : 'have'} no license recorded.</div>` : ''}`;
+      submit.disabled = blocked.length > 0;
+    };
+    $('form', d).addEventListener('change', check);
+    check();
+    return d;
+  };
   $('#new', page).onclick = () => edit(null);
   $$('[data-edit]', page).forEach((b) => b.onclick = () => edit(colls.find((c) => c.id === +b.dataset.edit)));
   $$('[data-open]', page).forEach((a) => a.onclick = () => { S.lib.coll = a.dataset.open; });
   $$('[data-del]', page).forEach((b) => b.onclick = () => {
     const c = colls.find((x) => x.id === +b.dataset.del);
-    confirmDialog('Delete collection', `Delete <b>${esc(c.name)}</b>? The fonts stay in the library, but users who only had access through this collection lose them.`,
+    confirmDialog('Delete collection', `Delete <b>${esc(c.name)}</b>? The fonts stay in the library, but people who only had them through this collection lose them${c.mode === 'installed' ? ' – they are removed from their computers' : ''}.`,
       async () => { await api('DELETE', `/api/collections/${c.id}`); S.lib.loaded = false; S.lib.coll = 'all'; renderCollections(page); });
   });
 }

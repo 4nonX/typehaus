@@ -29,7 +29,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, u *auth
 	rows, err := s.db.Query(`SELECT u.id, u.username, u.display_name, u.email, u.is_admin, u.disabled,
 		u.oidc_subject IS NOT NULL, COALESCE(u.password_hash, '') != '',
 		(SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id),
-		(SELECT COUNT(*) FROM activations a WHERE a.user_id = u.id), u.created_at
+		(SELECT COUNT(*) FROM user_fonts a WHERE a.user_id = u.id), u.created_at
 		FROM users u ORDER BY u.username COLLATE NOCASE`)
 	if err != nil {
 		s.internalErr(w, err)
@@ -336,9 +336,9 @@ func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *au
 		UserNames string  `json:"user_names"`
 	}
 	rows, err := s.db.Query(`SELECT f.family, COUNT(DISTINCT f.id), MAX(l.name), MAX(l.seats),
-		(SELECT COUNT(DISTINCT a.user_id) FROM activations a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.family = f.family),
+		(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f2 ON f2.id = a.font_id WHERE f2.family = f.family),
 		(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f3 ON f3.sha256 = df.sha256 WHERE f3.family = f.family),
-		COALESCE((SELECT GROUP_CONCAT(DISTINCT u.username) FROM activations a JOIN fonts f4 ON f4.id = a.font_id
+		COALESCE((SELECT GROUP_CONCAT(DISTINCT u.username) FROM user_fonts a JOIN fonts f4 ON f4.id = a.font_id
 			JOIN users u ON u.id = a.user_id WHERE f4.family = f.family), '')
 		FROM fonts f LEFT JOIN licenses l ON l.id = f.license_id
 		GROUP BY f.family ORDER BY f.family COLLATE NOCASE`)
