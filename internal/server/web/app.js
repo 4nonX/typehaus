@@ -53,12 +53,20 @@ const fmtSize = (b) => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max
 // ---------------------------------------------------------------------------
 // state & routing
 // ---------------------------------------------------------------------------
+// Preview size in points (CSS pt: 1/72 inch, as design apps show text at
+// 100 %), remembered per browser.
+const SIZE_MIN = 4, SIZE_MAX = 400;
+function savedSize() {
+  try { const v = parseFloat(localStorage.getItem('typehaus.size')); if (v >= SIZE_MIN && v <= SIZE_MAX) return v; } catch {}
+  return 30;
+}
+
 const S = {
   me: null,
   auth: null,
   lib: {
     fonts: [], collections: [], licenses: [], loaded: false,
-    q: '', coll: 'all', preview: '', size: 40, expanded: new Set(), selected: new Set(),
+    q: '', coll: 'all', preview: '', size: savedSize(), expanded: new Set(), selected: new Set(),
   },
 };
 
@@ -340,7 +348,10 @@ async function renderLibrary(page) {
         <div class="toolbar">
           <input type="search" id="q" placeholder="Search fonts…" value="${esc(L.q)}">
           <input type="text" class="preview-text" id="pv" placeholder="Type to preview…" value="${esc(L.preview)}">
-          <input type="range" id="sz" min="14" max="120" value="${L.size}" title="Preview size">
+          <span class="sizectl" title="Preview size in points">
+            <input type="range" id="sz" min="6" max="96" step="1" value="${Math.min(96, Math.max(6, Math.round(L.size)))}" aria-label="Preview size">
+            <label class="pt"><input type="number" id="szn" min="${SIZE_MIN}" max="${SIZE_MAX}" step="0.5" inputmode="decimal" value="${L.size}" aria-label="Preview size in points"><span>pt</span></label>
+          </span>
           <button class="btn sm" id="expandall">${L.expanded.size ? 'Collapse all' : 'Expand all'}</button>
         </div>
         <div id="bulk"></div>
@@ -354,8 +365,25 @@ async function renderLibrary(page) {
   q.oninput = () => { L.q = q.value; L.shown = 0; drawFamilies(); };
   const pv = $('#pv', page);
   pv.oninput = () => { L.preview = pv.value; $$('.specimen:not(.nopreview)', page).forEach((el) => el.textContent = L.preview || el.dataset.def); };
-  const sz = $('#sz', page);
-  sz.oninput = () => { L.size = +sz.value; $$('.family > .specimen', page).forEach((el) => el.style.fontSize = L.size + 'px'); };
+  const sz = $('#sz', page), szn = $('#szn', page);
+  const setSize = (v, from) => {
+    v = Math.round(v * 2) / 2;
+    if (!(v >= SIZE_MIN && v <= SIZE_MAX)) return false;
+    L.size = v;
+    $$('.family > .specimen, .style-row .specimen', page).forEach((el) => el.style.fontSize = v + 'pt');
+    if (from !== sz) sz.value = Math.min(96, Math.max(6, Math.round(v)));
+    if (from !== szn) szn.value = v;
+    try { localStorage.setItem('typehaus.size', v); } catch {}
+    return true;
+  };
+  sz.oninput = () => setSize(+sz.value, sz);
+  // typing: apply valid values right away; on leaving the field, clamp
+  szn.oninput = () => setSize(parseFloat(szn.value.replace(',', '.')), szn);
+  szn.onchange = () => {
+    const v = parseFloat(szn.value.replace(',', '.'));
+    setSize(Number.isFinite(v) ? Math.min(SIZE_MAX, Math.max(SIZE_MIN, v)) : L.size);
+  };
+  szn.onkeydown = (e) => { if (e.key === 'Enter') szn.blur(); };
   $('#expandall', page).onclick = () => {
     if (L.expanded.size) L.expanded.clear();
     else groupFamilies(filteredFonts()).forEach((fam) => L.expanded.add(fam.name));
@@ -403,12 +431,12 @@ function drawFamilies() {
         ${S.me.downloads ? `<button class="expand dl" title="Download ${fam.faces.length > 1 ? 'all styles as ZIP' : 'the font file'} to install it yourself">Download</button>` : ''}
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
       </div>
-      <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(fam.name)}" style="font-size:${L.size}px">${esc(L.preview || fam.name)}</div>
+      <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(fam.name)}" style="font-size:${L.size}pt">${esc(L.preview || fam.name)}</div>
       ${open ? `<div class="styles">${fam.faces.map((f) => `
         <div class="style-row" data-id="${f.id}">
           ${admin ? `<input type="checkbox" class="selface" ${L.selected.has(f.id) ? 'checked' : ''}>` : '<span></span>'}
           <span class="sname" title="${esc(f.full_name)}${f.postscript_name ? ' · ' + esc(f.postscript_name) : ''}${f.version ? ' · v' + esc(f.version) : ''} · ${f.format.toUpperCase()}${f.source_format ? ' (converted from ' + esc(f.source_format.toUpperCase()) + ')' : ''} · ${fmtSize(f.size)}">${f.opsz ? `<span class="badge">${esc(f.opsz)}</span> ` : ''}${esc(f.style)}${f.names_manual ? ` <span class="badge" title="Named by hand. Detected from the file: ${esc(f.family_auto)} / ${esc(f.style_auto)}">manual</span>` : ''} <span class="muted">${f.weight}${f.conflict ? ` · v${esc(f.version)}` : ''}</span></span>
-          <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}">${esc(L.preview || f.full_name)}</div>
+          <div class="specimen loading" data-font="${f.id}" data-def="${esc(f.full_name)}" style="font-size:${L.size}pt">${esc(L.preview || f.full_name)}</div>
           ${S.me.downloads ? `<button class="iconbtn dlface" title="Download ${esc(f.style)}" aria-label="Download ${esc(f.full_name)}">↓</button>` : '<span></span>'}
           ${f.required
             ? `<label class="toggle locked" title="${esc(requiredTitle(f))}"><input type="checkbox" checked disabled><span></span></label>`

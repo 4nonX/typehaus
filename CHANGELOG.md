@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Added
+- **Exact preview sizes.** Next to the size slider, a field takes the preview size in points (4–400 pt, half points allowed), as design apps show text at 100 %. The size now applies to the expanded styles too and is remembered per browser.
+
 ### Fixed
 - License notes and the license text read from font files lost their structure: wrapped lines of indented items fell back to the left edge, so pasted EULAs no longer showed which clause belongs where, and a full EULA filled the whole license card. Each line now keeps its indentation, paragraphs stay apart, and long texts start collapsed with *Show all*.
 

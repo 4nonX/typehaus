@@ -130,6 +130,11 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .toolbar input[type=search] { width: 220px; }
 .toolbar input.preview-text { flex: 1; min-width: 180px; }
 .toolbar input[type=range] { width: 110px; accent-color: var(--accent); }
+.sizectl { display: inline-flex; align-items: center; gap: 8px; }
+.sizectl .pt { display: inline-flex; align-items: center; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); padding-right: 8px; }
+.sizectl .pt:focus-within { border-color: var(--ink-3); }
+.sizectl .pt input { width: 4.2em; border: 0; background: transparent; padding: 7px 4px 7px 9px; text-align: right; font-variant-numeric: tabular-nums; box-shadow: none; outline: none; }
+.sizectl .pt span { color: var(--ink-3); font-size: 13px; }
 /* selection bar: an ordinary raised card in both themes, stays in view while scrolling */
 .bulk {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 14px; margin: 8px 0 16px;
