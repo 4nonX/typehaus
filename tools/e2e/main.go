@@ -577,11 +577,23 @@ func (e *env) affinityFlow(expected map[string]bool) {
 	var lib []struct {
 		SHA256     string `json:"sha256"`
 		PostScript string `json:"postscript_name"`
+		Kind       string `json:"kind"`
 	}
 	e.api("GET", "/api/fonts", nil, &lib)
+	// a document holds outline fonts (TrueType, OpenType, Type 1) only
 	doc := affinitytest.Doc{Title: "E2E poster.af", Current: true, Fonts: []affinitytest.Font{{Name: "Futura-Bold"}, {Name: "ArialMT", Installed: true}}}
+	want := map[string]bool{}
 	for _, f := range lib {
+		if f.PostScript == "" || (f.Kind != "sfnt" && f.Kind != "type1") {
+			continue
+		}
 		doc.Fonts = append(doc.Fonts, affinitytest.Font{Name: f.PostScript})
+		if expected[f.SHA256] {
+			want[f.SHA256] = true
+		}
+	}
+	if len(want) == 0 {
+		fail("no outline font in the library to test Affinity with")
 	}
 	fake.SetDocs(doc)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -602,11 +614,17 @@ func (e *env) affinityFlow(expected map[string]bool) {
 		}
 	}()
 	waitFor("fonts installed for the Affinity document", 60*time.Second, func() bool {
-		return len(e.installed(e.home)) == len(expected)
+		n := 0
+		for _, f := range e.installed(e.home) {
+			if want[f.SHA256] {
+				n++
+			}
+		}
+		return n == len(want)
 	})
 	for _, f := range e.installed(e.home) {
-		if !expected[f.SHA256] {
-			fail("%s should not be installed on %s", f.Path, runtime.GOOS)
+		if !want[f.SHA256] {
+			fail("%s isn't used by the document and must not be installed", f.Path)
 		}
 		verifyUserInstalled(e, f)
 	}
@@ -614,5 +632,5 @@ func (e *env) affinityFlow(expected map[string]bool) {
 	if !strings.Contains(calls, "initialize") || !strings.Contains(calls, "tools/call:read_sdk_documentation_topic") || fake.Scripts() == 0 {
 		fail("unexpected MCP conversation: %s", calls)
 	}
-	fmt.Printf("ok: %d font(s) an Affinity document uses were switched on and installed (%d scripts run)\n", len(expected), fake.Scripts())
+	fmt.Printf("ok: %d font(s) an Affinity document uses were switched on and installed (%d scripts run)\n", len(want), fake.Scripts())
 }
