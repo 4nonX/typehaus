@@ -1135,7 +1135,8 @@ async function renderDevices(page) {
       <h2 style="margin-top:0">Plugins for design apps</h2>
       <p class="small" style="color:var(--ink-2)">See which fonts a document is missing and switch them on without leaving the app. The plugins work through the typehaus app on the same computer – install and connect it first.</p>
       <div class="plist">${plugins.map((p) => `<div class="pitem"><b>${esc(p.app)}</b><span class="small muted">${PLUGIN_NEEDS[p.id] || ''}</span>
-        ${p.available ? `<a class="btn sm" href="${esc(p.url)}" download>Download .${esc(p.format)}</a>` : '<span class="small muted">in the release builds</span>'}</div>`).join('')}
+        ${p.available ? `<a class="btn sm" href="${esc(p.url)}" download>Download .${esc(p.format)}</a>`
+          : `<a class="btn sm" href="https://github.com/4nonX/typehaus/releases/latest/download/${esc(p.name)}" target="_blank" rel="noopener" title="This server has no copy; the signed file is attached to every typehaus release">Download .${esc(p.format)} from GitHub ↗</a>`}</div>`).join('')}
         <div class="pitem"><b>Affinity</b><span class="small muted">3.3 or later</span><span class="small">No plugin needed</span></div></div>
       <p class="small muted">Install: open the typehaus app's window and choose <b>Install panel</b> next to the app – or double-click a downloaded .ccx file and Creative Cloud installs it
         (it may point out that the plugin isn't from the Adobe Marketplace). Affinity: turn on <b>Settings → Model Context Protocol → Enable MCP server</b> and restart Affinity; typehaus connects by itself.</p>

@@ -313,6 +313,10 @@ jobs:
         with:
           name: linux-agents
           path: dist/agents/
+      - uses: actions/download-artifact@v4
+        with:
+          name: adobe-plugins
+          path: dist/agents/
       - run: cp -v mac/typehaus-* dist/agents/
       - uses: ./.github/actions/image
         with:

@@ -6,6 +6,11 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-13
+
+### Fixed
+- **The Illustrator plugin was missing from the Docker image.** The release builds the server image twice – the second time with the macOS app – and the second build left out the signed Illustrator extension, so the Devices page offered no download for it. Every image build now includes it and fails if it is missing. Should a server still lack the file, the Devices page links to it on the GitHub release.
+
 ## [1.1.2] - 2026-11-13
 
 ### Fixed
