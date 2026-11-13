@@ -294,6 +294,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/agent/report", s.device(s.handleAgentReport))
 	mux.Handle("POST /api/agent/inventory", s.device(s.handleAgentInventory))
 	mux.Handle("GET /api/inventory", s.admin(s.handleInventory))
+	mux.Handle("GET /api/inventory.csv", s.admin(s.handleInventoryCSV))
 
 	// agent binaries (public: open-source, needed before a device can authenticate)
 	mux.HandleFunc("GET /api/downloads", s.handleListDownloads)

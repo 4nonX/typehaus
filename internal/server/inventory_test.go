@@ -2,8 +2,10 @@ package server
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/4nonX/typehaus/internal/protocol"
@@ -86,6 +88,42 @@ func TestInventory(t *testing.T) {
 	}
 	if exact != 1 {
 		t.Fatalf("one exact copy expected: %+v", f.Copies)
+	}
+
+	// audit exports: one row per copy, and the count per license
+	_, _, body := admin.get("/api/inventory.csv")
+	recs, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(body, "\ufeff"))).ReadAll()
+	if err != nil || len(recs) != 3 || recs[0][0] != "Family" {
+		t.Fatalf("inventory csv: %v %q", err, body)
+	}
+	exactRows := 0
+	for _, r := range recs[1:] {
+		if r[0] != "Poppins" || r[2] != "Poppins commercial" {
+			t.Fatalf("row: %q", r)
+		}
+		if r[6] == "yes" {
+			exactRows++
+		}
+	}
+	if exactRows != 1 {
+		t.Fatalf("exact copies in csv: %d", exactRows)
+	}
+	_, _, body = admin.get("/api/licenses/export.csv")
+	recs, _ = csv.NewReader(strings.NewReader(strings.TrimPrefix(body, "\ufeff"))).ReadAll()
+	col := -1
+	for i, h := range recs[0] {
+		if h == "Copies outside typehaus" {
+			col = i
+		}
+	}
+	found := false
+	for _, r := range recs[1:] {
+		if col >= 0 && r[0] == "Poppins commercial" {
+			found = r[col] == "2"
+		}
+	}
+	if !found {
+		t.Fatalf("license csv column: %q", recs)
 	}
 
 	// a new report replaces the old one

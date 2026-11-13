@@ -1010,6 +1010,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		s.internalErr(w, err)
 		return
 	}
+	copies := s.outsideCopies() // before the queries below: one database connection
 	holders := map[int64][]string{}
 	if rows, err := s.db.Query(`SELECT DISTINCT f.license_id, u.username FROM user_fonts a JOIN fonts f ON f.id = a.font_id
 		JOIN users u ON u.id = a.user_id WHERE f.license_id IS NOT NULL ORDER BY u.username COLLATE NOCASE`); err == nil {
@@ -1030,7 +1031,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Peak (12 months)", "Status", "Enforced",
-		"Admins counted", "Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Terms URL", "Documents"})
+		"Admins counted", "Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Copies outside typehaus", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
 		if l.Seats > 0 {
@@ -1048,9 +1049,13 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		if l.SeatUnit == "devices" {
 			peak = l.PeakDevices
 		}
+		outside := "" // inventory scan off: unknown, not zero
+		if s.cfg.Inventory {
+			outside = strconv.Itoa(copies[l.ID])
+		}
 		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used), strconv.Itoa(peak),
 			l.status(), enforced, yesNo(l.CountAdmins), yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
-			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), l.URL, strings.Join(docs, "; ")})
+			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), outside, l.URL, strings.Join(docs, "; ")})
 	}
 	if unassigned > 0 {
 		cw.Write([]string{"(no license assigned)", "", "", "", "", "", "", fmt.Sprintf("%d families", unassigned)})

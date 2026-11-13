@@ -319,3 +319,19 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .allrow { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px 0; border-bottom: 1px solid var(--rule); margin-bottom: 4px; font-size: 14px; }
 .toggle input:indeterminate + span { background: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
 .allrow.sel { padding-left: 25px; }
+
+/* waterfall (family Info) */
+.wf-head { margin-top: 18px; align-items: center; }
+.wf-head h4 { margin: 0; }
+.waterfall { border: 1px solid var(--rule); border-radius: 8px; padding: 6px 12px; background: var(--card); }
+.wf-row { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: baseline; padding: 3px 0; }
+.wf-row + .wf-row { border-top: 1px dashed var(--rule); }
+.wf-sz { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; }
+.wf-txt { white-space: nowrap; overflow: hidden; line-height: 1.25; color: var(--ink); -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); transition: opacity .2s; }
+.wf-txt.loading { opacity: .25; }
+.wf-txt.nopreview { font: italic 13px var(--serif); color: var(--ink-3); }
+
+/* sample texts next to the preview field */
+.pvctl { display: flex; flex: 1; min-width: 220px; }
+.pvctl input.preview-text { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pvctl select { flex: none; width: 112px; border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; color: var(--ink-2); }

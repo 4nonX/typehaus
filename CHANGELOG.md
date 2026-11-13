@@ -8,6 +8,15 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ### Added
 - **Exact preview sizes.** Next to the size slider, a field takes the preview size in points (4–400 pt, half points allowed), as design apps show text at 100 %. The size now applies to the expanded styles too and is remembered per browser.
+- **Switch everything on or off.** A switch above the library list turns on or off every font in the current view – the whole library, a collection or a search result. It shows a half state when only some are on, asks before switching more than ten styles, and leaves fonts installed by the organisation alone.
+- **Waterfall.** A family's *Info* shows the sample text from 8 to 72 pt, for any of its styles.
+- **Sample texts.** A menu next to the preview field: pangrams in English and German, the alphabet with umlauts, figures and currency, punctuation and quotes, and running text.
+- **Request a font from an empty search.** When a search finds nothing, the library offers to request that font, with the name filled in (or points to another collection that has it).
+- **Copies outside typehaus in the audit exports.** The inventory section exports every copy found as CSV, and the license CSV gained a *Copies outside typehaus* column.
+- Keyboard: `/` jumps to the library search; `Esc` clears the search or preview field.
+
+### Changed
+- Fonts are counted by family (by name) instead of by style file: in the library sidebar, the collections, the switch above the list, selections and messages ("Activated Carlito (3 styles)"). Style counts still appear where they differ.
 
 ### Fixed
 - License notes and the license text read from font files lost their structure: wrapped lines of indented items fell back to the left edge, so pasted EULAs no longer showed which clause belongs where, and a full EULA filled the whole license card. Each line now keeps its indentation, paragraphs stay apart, and long texts start collapsed with *Show all*.

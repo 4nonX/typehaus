@@ -313,10 +313,11 @@ function filteredFonts() {
   return L.fonts.filter((f) => {
     if (L.coll === 'active' && !isOn(f)) return false;
     if (L.coll !== 'all' && L.coll !== 'active' && !f.collections.includes(+L.coll)) return false;
-    if (q && !(`${f.family} ${f.full_name} ${f.postscript_name} ${f.designer} ${f.manufacturer}`.toLowerCase().includes(q))) return false;
+    if (q && !matchesQuery(f, q)) return false;
     return true;
   });
 }
+const matchesQuery = (f, q) => `${f.family} ${f.full_name} ${f.postscript_name} ${f.designer} ${f.manufacturer}`.toLowerCase().includes(q);
 
 async function renderLibrary(page) {
   const L = S.lib;
@@ -325,17 +326,17 @@ async function renderLibrary(page) {
     await loadLibrary();
   }
   const isAdmin = S.me.is_admin;
-  const activeCount = L.fonts.filter(isOn).length;
+  const activeCount = famCount(L.fonts.filter(isOn));
   page.innerHTML = `
     <div class="lib">
       <aside class="side">
         <h1 style="font-size:28px">Library</h1>
         <p class="muted small" style="margin:0">${plural(groupFamilies(L.fonts).length, 'family', 'families')} · ${plural(L.fonts.length, 'style')}</p>
         <h4>Show</h4>
-        <a href="#" data-coll="all" class="${L.coll === 'all' ? 'active' : ''}">All fonts <span class="n">${L.fonts.length}</span></a>
+        <a href="#" data-coll="all" class="${L.coll === 'all' ? 'active' : ''}">All fonts <span class="n">${famCount(L.fonts)}</span></a>
         <a href="#" data-coll="active" class="${L.coll === 'active' ? 'active' : ''}">Active for me <span class="n">${activeCount}</span></a>
         <h4>Collections</h4>
-        ${L.collections.map((c) => `<a href="#" data-coll="${c.id}" class="${String(L.coll) === String(c.id) ? 'active' : ''}">${esc(c.name)} <span class="n">${c.font_count}</span></a>`).join('') || '<p class="muted small" style="padding:0 10px">None yet</p>'}
+        ${L.collections.map((c) => `<a href="#" data-coll="${c.id}" class="${String(L.coll) === String(c.id) ? 'active' : ''}">${esc(c.name)} <span class="n">${famCount(inCollection(c.id))}</span></a>`).join('') || '<p class="muted small" style="padding:0 10px">None yet</p>'}
         ${isAdmin ? '<p style="padding:0 10px"><a href="#/collections" class="small" style="padding:0">Manage collections →</a></p>' : ''}
         <h4>Missing a font?</h4>
         <a href="#" id="reqfont">Request a font${myAnswers().length ? ` <span class="n"><span class="badge on">${myAnswers().length} new answer${myAnswers().length > 1 ? 's' : ''}</span></span>` : ''}</a>
@@ -346,8 +347,11 @@ async function renderLibrary(page) {
           ${!['all', 'active'].includes(String(L.coll)) ? `<br><span class="small muted">Uploads are added to the selected collection.</span>` : ''}
           <input type="file" id="file" multiple hidden></div>` : ''}
         <div class="toolbar">
-          <input type="search" id="q" placeholder="Search fonts…" value="${esc(L.q)}">
-          <input type="text" class="preview-text" id="pv" placeholder="Type to preview…" value="${esc(L.preview)}">
+          <input type="search" id="q" placeholder="Search fonts…  /" value="${esc(L.q)}" title="Search (press / to jump here, Esc to clear)">
+          <span class="pvctl">
+            <input type="text" class="preview-text" id="pv" placeholder="Type to preview…" value="${esc(L.preview)}" title="Preview text (Esc clears)">
+            <select id="pvs" aria-label="Sample text" title="Sample texts"><option value="">Samples</option>${SAMPLES.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('')}</select>
+          </span>
           <span class="sizectl" title="Preview size in points">
             <input type="range" id="sz" min="6" max="96" step="1" value="${Math.min(96, Math.max(6, Math.round(L.size)))}" aria-label="Preview size">
             <label class="pt"><input type="number" id="szn" min="${SIZE_MIN}" max="${SIZE_MAX}" step="0.5" inputmode="decimal" value="${L.size}" aria-label="Preview size in points"><span>pt</span></label>
@@ -364,8 +368,18 @@ async function renderLibrary(page) {
   $$('.side a[data-coll]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); L.coll = a.dataset.coll; L.selected.clear(); L.shown = 0; renderLibrary(page); });
   const q = $('#q', page);
   q.oninput = () => { L.q = q.value; L.shown = 0; drawFamilies(); };
+  escClears(q, () => { L.q = ''; L.shown = 0; drawFamilies(); });
   const pv = $('#pv', page);
-  pv.oninput = () => { L.preview = pv.value; $$('.specimen:not(.nopreview)', page).forEach((el) => el.textContent = L.preview || el.dataset.def); };
+  const setPreview = (t) => { L.preview = t; $$('.specimen:not(.nopreview)', page).forEach((el) => el.textContent = L.preview || el.dataset.def); };
+  pv.oninput = () => setPreview(pv.value);
+  const pvs = $('#pvs', page);
+  pvs.onchange = () => {
+    if (pvs.value === '') return;
+    pv.value = SAMPLES[+pvs.value].text;
+    setPreview(pv.value);
+    pvs.value = '';
+  };
+  escClears(pv, () => setPreview(''));
   const sz = $('#sz', page), szn = $('#szn', page);
   const setSize = (v, from) => {
     v = Math.round(v * 2) / 2;
@@ -401,8 +415,21 @@ function drawFamilies() {
   const fams = groupFamilies(filteredFonts());
   drawAllRow();
   if (!fams.length) {
-    box.innerHTML = `<div class="empty"><div class="big">Nothing here yet.</div>${
-      L.fonts.length ? 'No fonts match this view.' : (S.me.is_admin ? 'Upload fonts above to build your library.' : 'Ask an administrator to give you access to a collection.')}</div>`;
+    const q = L.q.trim();
+    if (q && L.fonts.length) {
+      // a search that finds nothing: the font may simply not be here yet
+      const elsewhere = String(L.coll) !== 'all' && groupFamilies(L.fonts.filter((f) => matchesQuery(f, q.toLowerCase()))).length;
+      box.innerHTML = `<div class="empty"><div class="big">No font matches “${esc(q)}”.</div>
+        ${elsewhere ? `<p><a href="#" id="searchall">Search all fonts</a> – it's in another collection.</p>` : ''}
+        <p>${S.me.is_admin ? 'Upload it above, or note it as a request.' : 'Not in the library yet? Ask your administrators to add it.'}</p>
+        <button class="btn" id="reqq">Request “${esc(q)}”</button></div>`;
+      $('#reqq', box).onclick = () => requestFont(q);
+      const sa = $('#searchall', box);
+      if (sa) sa.onclick = (e) => { e.preventDefault(); L.coll = 'all'; L.shown = 0; renderLibrary($('#page')); };
+    } else {
+      box.innerHTML = `<div class="empty"><div class="big">Nothing here yet.</div>${
+        L.fonts.length ? 'No fonts match this view.' : (S.me.is_admin ? 'Upload fonts above to build your library.' : 'Ask an administrator to give you access to a collection.')}</div>`;
+    }
     drawBulk();
     return;
   }
@@ -501,11 +528,11 @@ function updateRequestsCount() {
   c.textContent = n;
 }
 
-function requestFont() {
+function requestFont(prefill = '') {
   const mine = myRequests();
   const d = dialog('Request a font', `
     <p class="small muted" style="margin:0">Tell your administrators which font you need. They decide whether to add it – depending on its license – and you'll see the answer here.</p>
-    <label class="field">Font<input type="text" name="font" required maxlength="200" placeholder="e.g. Brandon Grotesque Medium"></label>
+    <label class="field">Font<input type="text" name="font" required maxlength="200" value="${esc(prefill)}" placeholder="e.g. Brandon Grotesque Medium"></label>
     <label class="field">What for? <span class="muted">(optional)</span><textarea name="purpose" rows="2" maxlength="2000" placeholder="Project, client, or a link to the font"></textarea></label>
     ${mine.length ? `<h4>Your requests</h4><div class="reqs">${mine.map((r) => `<div class="req ${r.status !== 'open' && !r.seen ? 'new' : ''}">
       <div><b>${esc(r.font)}</b> ${REQ_STATUS[r.status] || ''} <span class="small muted">${ago(r.resolved_at || r.created_at)}</span></div>
@@ -570,7 +597,8 @@ const requiredTitle = (f) => `Installed for you by your organisation (collection
 async function setActive(ids, on) {
   try {
     const r = await api(on ? 'POST' : 'DELETE', '/api/activations', { font_ids: ids });
-    toast(on ? `Activated ${plural(ids.length, 'style')} – your devices sync shortly` : `Deactivated ${plural(ids.length, 'style')}`);
+    const what = fontsLabel(fontsByIds(ids)) || plural(ids.length, 'style');
+    toast(on ? `Activated ${what} – your devices sync shortly` : `Deactivated ${what}`);
     if (!on && r.kept) toast(`${plural(r.kept, 'style')} stay installed – your organisation installs them for you`);
     if (on && r.replaced) toast(`${plural(r.replaced, 'style')} with the same name switched off – only one version can be active`);
     if (on && r.refused?.length) toast(`Some styles were not activated: ${r.refused.join('; ')}`, true);
@@ -612,6 +640,57 @@ function decodeMime(s) {
   });
 }
 
+// Fonts are counted by family (by name), like the library lists them; the
+// number of style files follows where it differs.
+const famCount = (fonts) => groupFamilies(fonts).length;
+function fontsLabel(fonts) {
+  const fams = groupFamilies(fonts);
+  const n = fonts.length;
+  if (fams.length === 1) {
+    if (n === 1) return `${fams[0].name} ${fonts[0].style}`.trim();
+    return `${fams[0].name} (${plural(n, 'style')})`;
+  }
+  return plural(fams.length, 'family', 'families') + (n !== fams.length ? ` (${plural(n, 'style')})` : '');
+}
+const fontsByIds = (ids) => { const s = new Set(ids); return S.lib.fonts.filter((f) => s.has(f.id)); };
+const inCollection = (id) => S.lib.fonts.filter((f) => f.collections.includes(id));
+
+// Esc in a field clears it; a second Esc leaves the field.
+function escClears(el, apply) {
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    if (el.value) { el.value = ''; apply(); } else el.blur();
+  });
+}
+
+// "/" jumps to the library search from anywhere on the page.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || route() !== 'library') return;
+  const t = e.target;
+  if (t.closest('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
+  const q = $('#q');
+  if (!q) return;
+  e.preventDefault();
+  q.focus();
+  q.select();
+});
+
+// Sizes of the waterfall in a family's Info, in points.
+const WATERFALL = [8, 9, 10, 12, 14, 18, 24, 36, 48, 72];
+
+// Sample texts for the preview field. The running texts are our own.
+const SAMPLES = [
+  { name: 'Pangram (English)', text: 'The quick brown fox jumps over the lazy dog' },
+  { name: 'Pangram (German)', text: 'Victor jagt zwölf Boxkämpfer quer über den großen Sylter Deich' },
+  { name: 'Alphabet & umlauts', text: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ÄÖÜ äöü ß ẞ' },
+  { name: 'Figures & currency', text: '0123456789 · 1.234,56 € · $1,234.56 · £ ¥ ¢ · % ‰ · ½ ¼ ¾ · + − × ÷ = ± · #@&' },
+  { name: 'Punctuation & quotes', text: '„Deutsch“ ‚einfach‘ »Guillemets« “English” ‘single’ – — … ! ? ¡ ¿ ( ) [ ] { } / \\ · • § ¶ © ® ™' },
+  { name: 'Running text (English)', text: 'Good typography goes unnoticed. The reader simply follows the text, line after line, without stumbling over a cramped letter, a loose word space or a figure that sits too high – and only notices the typeface once it is missing.' },
+  { name: 'Running text (German)', text: 'Gute Typografie fällt nicht auf. Man liest einfach weiter, Zeile für Zeile, ohne über einen zu engen Buchstaben, einen zu weiten Wortabstand oder eine zu hoch stehende Ziffer zu stolpern – und bemerkt die Schrift erst, wenn sie fehlt.' },
+  { name: 'Hamburgefonstiv', text: 'Hamburgefonstiv HAMBURGEFONSTIV' },
+];
+
 // One switch for every font in the current view (search and collection
 // applied; with "All fonts" and no search that is the whole library). Fonts
 // the organisation installs are always on and not touched.
@@ -626,11 +705,14 @@ function drawAllRow() {
   const req = shown.filter((f) => f.required).length;
   const off = shown.filter((f) => !isOn(f));
   const on = shown.length - off.length;
-  const label = whole ? 'All fonts' : String(L.coll) === 'active' && !L.q.trim() ? 'All fonts active for me' : `All ${plural(shown.length, 'style')} shown`;
+  const shownFams = groupFamilies(shown);
+  const famsOn = shownFams.filter((fm) => fm.faces.every(isOn)).length;
+  const famsPart = shownFams.filter((fm) => fm.faces.some(isOn) && !fm.faces.every(isOn)).length;
+  const label = whole ? 'All fonts' : String(L.coll) === 'active' && !L.q.trim() ? 'All fonts active for me' : `All ${plural(shownFams.length, 'family', 'families')} shown`;
   row.innerHTML = `<div class="allrow${S.me.is_admin ? " sel" : ""}">
     <label class="toggle" title="${off.length ? 'Switch on' : 'Switch off'} ${whole ? 'every font in the library' : 'every font in this view'}"><input type="checkbox" id="allon" ${off.length ? '' : 'checked'}><span></span></label>
     <b>${label}</b>
-    <span class="muted small">${on} of ${plural(shown.length, 'style')} on${req ? ` · ${req} installed by your organisation` : ''}</span></div>`;
+    <span class="muted small">${famsOn} of ${plural(shownFams.length, 'family', 'families')} on${famsPart ? ` · ${famsPart} partly` : ''}${req ? ` · ${plural(famCount(shown.filter((f) => f.required)), 'family', 'families')} installed by your organisation` : ''}</span></div>`;
   const cb = $('#allon', row);
   cb.indeterminate = on > 0 && off.length > 0;
   cb.onchange = () => {
@@ -645,11 +727,11 @@ function drawAllRow() {
     const go = () => setActive(ids, turnOn);
     if (ids.length <= 10) { go(); return; }
     if (turnOn) {
-      dialog('Switch on all fonts', `<p>Switch on <b>${plural(ids.length, 'style')}</b>${where}? They are installed on all your computers within a minute.</p>
+      dialog('Switch on all fonts', `<p>Switch on <b>${esc(fontsLabel(fontsByIds(ids)))}</b>${where}? They are installed on all your computers within a minute.</p>
         <p class="small muted">Fonts under licenses without free seats are left off.</p>`, { submit: 'Switch on', onSubmit: go });
     } else {
-      dialog('Switch off all fonts', `<p>Switch off <b>${plural(ids.length, 'style')}</b>${where}? They are removed from your computers at their next sync.</p>
-        ${req ? `<p class="small muted">${plural(req, 'style')} installed by your organisation stay on.</p>` : ''}`, { submit: 'Switch off', onSubmit: go });
+      dialog('Switch off all fonts', `<p>Switch off <b>${esc(fontsLabel(fontsByIds(ids)))}</b>${where}? They are removed from your computers at their next sync.</p>
+        ${req ? `<p class="small muted">${esc(fontsLabel(shown.filter((f) => f.required)))} installed by your organisation ${req === 1 ? 'stays' : 'stay'} on.</p>` : ''}`, { submit: 'Switch off', onSubmit: go });
     }
   };
 }
@@ -662,7 +744,7 @@ function drawBulk() {
   if (!n) { box.innerHTML = ''; return; }
   const inColl = !['all', 'active'].includes(String(L.coll));
   box.innerHTML = `<div class="bulk">
-    <b>${plural(n, 'style')} selected</b>
+    <b>${esc(fontsLabel(fontsByIds([...L.selected])))} selected</b>
     <select id="b-coll"><option value="">Add to collection…</option>${L.collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
     ${inColl ? '<button class="btn sm" id="b-rm">Remove from this collection</button>' : ''}
     <select id="b-lic"><option value="">Assign license…</option><option value="0">— No license —</option>${L.licenses.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')}</select>
@@ -707,7 +789,7 @@ function drawBulk() {
     try { await api('PATCH', '/api/fonts', { font_ids: ids, license_id: +e.target.value }); await reload('License assigned'); } catch (ex) { fail(ex); }
   };
   $('#b-del').onclick = () => confirmDialog('Delete fonts',
-    `Permanently delete ${plural(n, 'style')} from the library? They will be removed from every device on its next sync.`,
+    `Permanently delete ${esc(fontsLabel(fontsByIds(ids)))} from the library? They will be removed from every device on its next sync.`,
     async () => { await api('DELETE', '/api/fonts', { font_ids: ids }); L.selected.clear(); await reload('Deleted'); });
 }
 
@@ -1000,17 +1082,17 @@ async function renderDevices(page) {
 // collections (admin)
 // ---------------------------------------------------------------------------
 async function renderCollections(page) {
-  const [colls, groups] = await Promise.all([api('GET', '/api/collections'), api('GET', '/api/groups')]);
+  const [colls, groups] = await Promise.all([api('GET', '/api/collections'), api('GET', '/api/groups'), S.lib.loaded ? null : loadLibrary()]);
   const gname = (id) => groups.find((g) => g.id === id)?.name || '?';
   page.innerHTML = `
     <div class="row"><div><h1>Collections</h1><p class="sub">Collections decide who gets which fonts: <b>available</b> to switch on when needed, or <b>installed automatically</b> on every computer of the people they apply to. Add fonts to collections from the Library.</p></div>
       <span class="spacer"></span><button class="btn primary" id="new">New collection</button></div>
-    ${colls.length ? `<table class="t"><thead><tr><th>Name</th><th>For</th><th>Distribution</th><th class="num">Styles</th><th></th></tr></thead><tbody>
+    ${colls.length ? `<table class="t"><thead><tr><th>Name</th><th>For</th><th>Distribution</th><th class="num">Fonts</th><th></th></tr></thead><tbody>
       ${colls.map((c) => `<tr><td><b>${esc(c.name)}</b>${c.description ? `<div class="small muted">${esc(c.description)}</div>` : ''}</td>
         <td>${c.everyone ? '<span class="badge on">Everyone</span>' : (c.group_ids.length ? c.group_ids.map((g) => `<span class="badge">${esc(gname(g))}</span>`).join(' ') : '<span class="muted small">Admins only</span>')}
           <div class="small muted">${plural(c.members, 'person', 'people')}</div></td>
         <td>${c.mode === 'installed' ? '<span class="badge inst">Installed automatically</span>' : '<span class="muted small">Available</span>'}</td>
-        <td class="num"><a href="#/library" data-open="${c.id}">${c.font_count}</a></td>
+        <td class="num"><a href="#/library" data-open="${c.id}" title="${plural(c.font_count, 'style')}">${plural(famCount(inCollection(c.id)), 'family', 'families')}</a></td>
         <td style="text-align:right;white-space:nowrap"><button class="btn sm" data-edit="${c.id}">Edit</button> <button class="btn sm danger" data-del="${c.id}">Delete</button></td></tr>`).join('')}
       </tbody></table>` : '<div class="empty"><div class="big">No collections yet.</div>Create one to share fonts with your team.</div>'}`;
 
@@ -1059,7 +1141,7 @@ async function renderCollections(page) {
       const over = r.licenses.filter((l) => !l.enforce && l.over);
       box.hidden = false;
       box.className = 'impact ' + (blocked.length ? 'bad' : over.length || r.unlicensed_families ? 'warn' : 'ok');
-      box.innerHTML = `<div><b>${c ? plural(r.fonts, 'style') : 'The fonts you add'}</b> will be installed for <b>${plural(r.members, 'person', 'people')}</b>${r.devices ? ` on ${plural(r.devices, 'computer')} so far` : ''}.</div>
+      box.innerHTML = `<div><b>${c ? (S.lib.loaded ? esc(fontsLabel(inCollection(c.id))) : plural(r.fonts, 'style')) : 'The fonts you add'}</b> will be installed for <b>${plural(r.members, 'person', 'people')}</b>${r.devices ? ` on ${plural(r.devices, 'computer')} so far` : ''}.</div>
         ${r.licenses.length ? `<table class="t small"><thead><tr><th>License</th><th class="num">Seats</th><th class="num">In use now</th><th class="num">After</th><th></th></tr></thead><tbody>
           ${r.licenses.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.seats || '∞'} <span class="muted">${l.unit}</span></td><td class="num">${l.now}</td><td class="num"><b>${l.after}</b></td>
             <td>${l.over ? (l.enforce ? '<span class="badge danger">blocked – not enough seats</span>' : '<span class="badge warn">exceeds seats</span>') : '<span class="badge open">covered</span>'}</td></tr>`).join('')}
@@ -1263,6 +1345,9 @@ async function familyInfo(fam) {
       <dt>Styles</dt><dd>${fam.faces.map((f) => esc((f.opsz ? f.opsz + ' ' : '') + f.style)).join(', ')}</dd>
       <dt>Format</dt><dd>${formats.map(esc).join(', ')}</dd>
     </dl>
+    <div class="row wf-head"><h4>Waterfall</h4><span class="spacer"></span>
+      ${fam.faces.length > 1 ? `<select id="wf-face" aria-label="Style">${fam.faces.map((f) => `<option value="${f.id}" ${f.id === r.id ? 'selected' : ''}>${esc((f.opsz ? f.opsz + ' ' : '') + f.style)}</option>`).join('')}</select>` : ''}</div>
+    <div class="waterfall" id="wf">${WATERFALL.map((pt) => `<div class="wf-row"><span class="wf-sz">${pt} pt</span><div class="wf-txt loading" style="font-size:${pt}pt">${esc(L.preview || SAMPLES[0].text)}</div></div>`).join('')}</div>
     <h4>License</h4>
     ${mixed ? '<p class="small muted">The styles of this family have different licenses; showing the license of the regular style.</p>' : ''}
     ${lic ? licenseCard(lic) : `<p class="muted">${admin ? 'No license recorded for this family.' : 'No license information recorded. Ask an administrator before using this font commercially.'}</p>`}
@@ -1298,6 +1383,14 @@ async function familyInfo(fam) {
       if (route() === 'library') await renderLibrary($('#page'));
     },
   });
+  const showFace = (id) => loadFace(id).then((ff) => $$('.wf-txt', d).forEach((el) => {
+    el.classList.remove('loading');
+    if (ff) el.style.fontFamily = `"${ff}", "Adobe NotDef", monospace`;
+    else { el.classList.add('nopreview'); el.textContent = 'No browser preview for this format'; }
+  }));
+  showFace(r.id);
+  const wfFace = $('#wf-face', d);
+  if (wfFace) wfFace.onchange = () => { $$('.wf-txt', d).forEach((el) => el.classList.add('loading')); showFace(+wfFace.value); };
 }
 
 // ---------------------------------------------------------------------------
@@ -1374,9 +1467,10 @@ function inventorySection(inv) {
     return `${head}<p class="small muted">Off. With <code>TYPEHAUS_INVENTORY=true</code> on the server, the typehaus app on each computer reports once a day which fonts were installed by other means – names and checksums only, never the files. Copies of licensed library fonts then show up here.</p>`;
   }
   if (!inv.devices_scanned) return `${head}<p class="small muted">Waiting for the first computers to report – the typehaus app scans once a day.</p>`;
-  const sub = `<p class="small muted">${plural(inv.devices_scanned, 'computer')} reported · ${plural(inv.unmanaged_files, 'font')} installed outside typehaus. Listed below: copies of library families that are not open source – they use a license without being counted.</p>`;
+  const sub = `<p class="small muted">${plural(inv.devices_scanned, 'computer')} reported · ${plural(inv.unmanaged_files, 'font file')} installed outside typehaus. Listed below: copies of library families that are not open source – they use a license without being counted.</p>`;
   if (!inv.findings.length) return `${head}${sub}<p><span class="badge open">none found</span> No copies of licensed library fonts.</p>`;
-  return `${head}${sub}
+  return `<div class="row"><h2>Installed outside typehaus</h2><span class="spacer"></span>
+      <a class="btn sm" href="/api/inventory.csv" download title="Every copy found, one row per file – for audits">Export CSV</a></div>${sub}
     <table class="t inv"><thead><tr><th>Family</th><th>License</th><th class="num">Computers</th><th>Where</th></tr></thead><tbody>
     ${inv.findings.map((f) => `<tr><td><b>${esc(f.family)}</b></td>
       <td>${f.license_id ? `<a href="#" data-open="${f.license_id}">${esc(f.license)}</a>` : '<span class="muted small">unassigned</span>'}</td>

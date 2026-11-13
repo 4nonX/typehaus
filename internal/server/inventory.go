@@ -1,10 +1,13 @@
 package server
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/4nonX/typehaus/internal/protocol"
 )
@@ -89,15 +92,27 @@ type inventoryFinding struct {
 	Copies    []inventoryCopy `json:"copies"`
 }
 
+type inventoryResult struct {
+	Enabled   bool               `json:"enabled"`
+	Scanned   int                `json:"devices_scanned"`
+	Unmanaged int                `json:"unmanaged_files"`
+	Findings  []inventoryFinding `json:"findings"`
+}
+
 // handleInventory lists copies of library fonts found outside typehaus.
-// Open-source families are left out: copying them is allowed.
 func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request, u *authUser) {
-	out := struct {
-		Enabled   bool               `json:"enabled"`
-		Scanned   int                `json:"devices_scanned"`
-		Unmanaged int                `json:"unmanaged_files"`
-		Findings  []inventoryFinding `json:"findings"`
-	}{Enabled: s.cfg.Inventory, Findings: []inventoryFinding{}}
+	out, err := s.inventory()
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+// inventory collects the copies of library fonts the computers reported.
+// Open-source families are left out: copying them is allowed.
+func (s *Server) inventory() (*inventoryResult, error) {
+	out := &inventoryResult{Enabled: s.cfg.Inventory, Findings: []inventoryFinding{}}
 	s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE inventory_at IS NOT NULL AND EXISTS (SELECT 1 FROM device_inventory i WHERE i.device_id = devices.id)`).Scan(&out.Scanned)
 	s.db.QueryRow(`SELECT COUNT(*) FROM device_inventory`).Scan(&out.Unmanaged)
 
@@ -111,23 +126,20 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request, u *auth
 		   OR EXISTS (SELECT 1 FROM fonts f WHERE f.family = i.family COLLATE NOCASE)
 		ORDER BY i.family COLLATE NOCASE, d.name, i.path`)
 	if err != nil {
-		s.internalErr(w, err)
-		return
+		return nil, err
 	}
 	var copies []inventoryCopy
 	for rows.Next() {
 		var c inventoryCopy
 		if err := rows.Scan(&c.DeviceID, &c.Device, &c.User, &c.Path, &c.Scope, &c.Style, &c.ScannedAt, &c.Exact, &c.FamilyName); err != nil {
 			rows.Close()
-			s.internalErr(w, err)
-			return
+			return nil, err
 		}
 		copies = append(copies, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		s.internalErr(w, err)
-		return
+		return nil, err
 	}
 
 	type lic struct {
@@ -175,5 +187,47 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request, u *auth
 		}
 		return strings.ToLower(out.Findings[i].Family) < strings.ToLower(out.Findings[j].Family)
 	})
-	writeJSON(w, 200, out)
+	return out, nil
+}
+
+// handleInventoryCSV exports every copy found outside typehaus, one row per
+// file, for audits.
+func (s *Server) handleInventoryCSV(w http.ResponseWriter, r *http.Request, u *authUser) {
+	inv, err := s.inventory()
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment",
+		map[string]string{"filename": "typehaus-outside-copies-" + time.Now().Format(dateLayout) + ".csv"}))
+	w.Write([]byte("\ufeff")) // Excel: UTF-8
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"Family", "Style", "License", "Computer", "User", "Installed for", "Exact copy of library file", "Path", "Scanned"})
+	for _, f := range inv.Findings {
+		for _, c := range f.Copies {
+			scope := "this user"
+			if c.Scope == "computer" {
+				scope = "all users"
+			}
+			cw.Write([]string{f.Family, c.Style, f.License, c.Device, c.User, scope, yesNo(c.Exact), c.Path,
+				time.Unix(c.ScannedAt, 0).UTC().Format(dateLayout)})
+		}
+	}
+	cw.Flush()
+}
+
+// outsideCopies counts, per license, the files found outside typehaus.
+func (s *Server) outsideCopies() map[int64]int {
+	out := map[int64]int{}
+	inv, err := s.inventory()
+	if err != nil {
+		return out
+	}
+	for _, f := range inv.Findings {
+		if f.LicenseID != nil {
+			out[*f.LicenseID] += len(f.Copies)
+		}
+	}
+	return out
 }
