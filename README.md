@@ -4,7 +4,10 @@
 
 **Self-hosted font management for teams.** A central font library with collections and group permissions, plus a small tray app that activates fonts on Windows, macOS and Linux **without admin rights**. A free, open-source alternative to Extensis Universal Type Server, FontAgent Server or FontExplorer X Server – in one Docker container.
 
-![Library](docs/library.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/library-dark.png">
+  <img src="docs/library.png" alt="The typehaus library">
+</picture>
 
 ## Why
 
@@ -22,10 +25,18 @@ typehaus does the core of it, free:
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
 - **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically; fonts from commercial foundries are suggested for review with the evidence from each file, and licenses can be set per family or per style. Choose per license whether administrators take seats. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
 - **Built for audits.** Usage is recorded daily per license, so you can show the *peak* of the last 12 months (not just today's count) in a chart, the list and the CSV. Commercial licenses don't allow direct downloads unless you say so. Installs "for all users of a computer" are flagged, because a per-user license can't count them – typehaus never puts an enforced per-user license there. For licenses that only allow use while connected, an **offline limit** removes the fonts from a computer that hasn't reached the server for a set number of days; they return once it is back. The optional **inventory scan** lists copies of licensed library fonts that were installed on computers by other means.
-- **API for other tools.** A stable, documented HTTP/JSON API (`/api/v1`, OpenAPI description included) with read-only or read & write tokens: feed font requests into your ticket system, let a document server fetch its fonts under the license rules, sync license data with procurement. See [docs/api.md](docs/api.md).
+- **Find fonts.** Search about 2,700 free families from Google Fonts, Font Squirrel and Fontsource and add them to the library in one click, complete and with their license recorded; users request them instead. **Identify a font** from an image: it goes to every identification service you have a key for (WhatFontIs, Mixfont, Aspose), and each match is checked against your library and the catalog. WhatTheFont, Identifont and others are linked.
+- **Missing fonts in design apps.** Panels for **InDesign, Photoshop and Illustrator** list the fonts an open document is missing, switch on the ones the person may use and request the others. **Affinity** needs no panel: the typehaus app talks to Affinity's built-in MCP server and switches on what open documents miss, automatically or with a click.
+- **Web fonts.** *Web kits* serve library fonts to your websites as WOFF2/WOFF from one stylesheet link – only fonts whose license includes web use, only to the domains you list, with page views counted against the license's monthly limit.
+- **API and webhooks for other tools.** A stable, documented HTTP/JSON API (`/api/v1`, OpenAPI description included) with read-only or read & write tokens: feed font requests into your ticket system, let a document server fetch its fonts under the license rules, sync license data with procurement. Signed **webhooks** report changes, expiring licenses and seat overruns as they happen. See [docs/api.md](docs/api.md).
 - **Activity log.** Uploads, activations, enrollments, sign-ins and admin changes.
 - **Single sign-on.** Optional OIDC (Authentik, Keycloak, Authelia, Zitadel, Entra ID, Google…) with group sync and admin mapping. Local accounts work out of the box.
 - **Small and boring to run.** A single Go binary with an embedded web UI. SQLite plus a content-addressed file store in one `/data` volume. Distroless image, no external services.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/find-fonts-dark.png">
+  <img src="docs/find-fonts.png" alt="Find fonts: free families from Google Fonts and Font Squirrel">
+</picture>
 
 ## Quick start
 
@@ -44,7 +55,7 @@ Open the UI and sign in as `admin`. If you didn't set `TYPEHAUS_ADMIN_PASSWORD`,
 
 Then:
 
-1. **Library** → drop your fonts in.
+1. **Library** → drop your fonts in, or add free ones under **Find fonts**.
 2. **People** → create groups and users, or connect SSO.
 3. **Collections** → create a collection, choose who can see it, and add fonts to it from the Library (select → *Add to collection*).
 4. **Devices** → each user downloads typehaus, opens it, and connects with a one-time code.
@@ -102,6 +113,22 @@ The menu offers *Open typehaus* (the window: status, installed fonts with live p
 
 On Linux the tray needs a StatusNotifier host (KDE, Xfce, Cinnamon, GNOME with the *AppIndicator* extension). Without one, typehaus keeps syncing in the background, and launching it again opens the window.
 
+### Design apps
+
+**InDesign, Photoshop, Illustrator.** The typehaus window lists the Adobe apps it finds, with an **Install panel** button (Adobe's Unified Plugin Installer Agent, which comes with Creative Cloud; without it the package opens in Creative Cloud). The packages are also on the Devices page. Open the panel in the app (*Plugins → typehaus* in InDesign and Photoshop; *Window → Extensions (Legacy) → typehaus* in Illustrator, *Window → Extensions* in versions before 2024): it lists the fonts the open document is missing –
+
+- **Switch on** for fonts in the library the person may use; they are installed while the panel waits,
+- **Request** for fonts they can't use or that aren't in typehaus.
+
+The panels talk only to the typehaus app on the same computer (`127.0.0.1:47130`), which asks the server for the signed-in person, with the library's license rules. Photoshop on macOS lets plugins use https only; there the panel exchanges request files with the app in the typehaus folder instead.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/devices-dark.png">
+  <img src="docs/devices.png" alt="Plugins for design apps on the Devices page">
+</picture>
+
+**Affinity** (3.3 and later) has no plugin interface but a built-in MCP server. Turn it on in Affinity (*Settings → Model Context Protocol → Enable MCP server*, then restart Affinity); the typehaus app then reads the fonts of the open documents and switches on those Affinity is missing. In the window, *Fonts missing in Affinity* chooses: switch on automatically (default), only show them, or off. Fonts the person can't use can be requested from there. `typehaus-agent affinity` checks the connection once and prints what it sees.
+
 ### Windows: fonts for all users
 
 A few older Windows applications only list fonts installed for *all* users and ignore per-user fonts. For such PCs, an administrator can additionally install the **typehaus service**, which installs the fonts of one typehaus account into `%WINDIR%\Fonts` for every user of the computer:
@@ -136,6 +163,7 @@ typehaus-agent autostart enable
 | `sync [--force]` | Sync once. `--force` re-verifies every installed file. |
 | `status` | Show the server, user, last sync and installed fonts. |
 | `inventory [--send]` | List the fonts installed outside typehaus; `--send` reports them to the server (when the server collects inventories – the app does it by itself once a day). |
+| `affinity` | Check the connection to Affinity once and list the open documents' missing fonts; changes nothing. |
 | `unenroll` | Remove all fonts typehaus installed, disable autostart, forget the enrollment. |
 | `machine enroll\|install\|status\|sync\|uninstall` | Windows only, as administrator: fonts for all users (see above). |
 
@@ -178,7 +206,11 @@ All settings are environment variables.
 | `TYPEHAUS_DOWNLOADS` | `true` | Let users download font files directly (this switch never applies to admins). Per-license setting on top, which applies to admins too unless the license is set not to count them. Downloaded fonts are outside typehaus' control: they aren't removed on revocation. |
 | `TYPEHAUS_INVENTORY` | `false` | Ask the apps to report, once a day, the fonts installed on each computer outside typehaus (names, sizes, checksums – never the files). Copies of licensed library fonts are listed on the Licenses page. Tell your users before you turn it on. |
 | `TYPEHAUS_LOCAL_LOGIN` | `true` | Set `false` to allow SSO only (requires `TYPEHAUS_OIDC_GROUPS_CLAIM` and `TYPEHAUS_OIDC_ADMIN_GROUP`) |
-| `TYPEHAUS_AGENTS_DIR` | `/app/agents` (image) | Agent binaries offered on the Devices page |
+| `TYPEHAUS_API_RATE` | `600` | API requests per token and minute |
+| `TYPEHAUS_CATALOG` | `true` | Free font catalog under *Find fonts*. Needs internet access (Fontsource, Font Squirrel, GitHub); set `false` on air-gapped servers. |
+| `TYPEHAUS_IDENTIFY` | `true` | *Identify a font* from an image |
+| `TYPEHAUS_WHATFONTIS_KEY`, `TYPEHAUS_MIXFONT_KEY`, `TYPEHAUS_ASPOSE_CLIENT_ID` / `_SECRET` | – | Keys of identification services. Admins can also enter them under *Integrations → Services*; the variables take precedence. Uploaded images are sent to these services. |
+| `TYPEHAUS_AGENTS_DIR` | `/app/agents` (image) | Agent binaries and app plugins offered on the Devices page |
 
 ### Single sign-on (OIDC)
 
@@ -197,13 +229,13 @@ Redirect URI: `https://fonts.example.com/auth/oidc/callback`. The login uses the
 
 ## API
 
-typehaus has a stable HTTP/JSON API under `/api/v1` for other tools. An administrator creates a token under **API → New token** (read, or read & write), and the tool sends it as `Authorization: Bearer thk_…`:
+typehaus has a stable HTTP/JSON API under `/api/v1` for other tools. An administrator creates a token under **Integrations → API tokens** (read, or read & write), and the tool sends it as `Authorization: Bearer thk_…`:
 
 ```sh
 curl -H "Authorization: Bearer thk_…" https://fonts.example.com/api/v1/licenses
 ```
 
-The server describes every endpoint at `/api/v1/openapi.json` (OpenAPI 3.1). Within version 1 the API changes only compatibly. Details and examples: [docs/api.md](docs/api.md).
+The server describes every endpoint at `/api/v1/openapi.json` (OpenAPI 3.1). Within version 1 the API changes only compatibly; a test against the published contract enforces it. **Webhooks** (*Integrations → Webhooks*) send signed events to your URL. Details and examples: [docs/api.md](docs/api.md).
 
 ## Backups
 
@@ -223,12 +255,12 @@ Found a vulnerability? Please open a private security advisory on GitHub rather 
 
 typehaus covers the core workflow: central library, permissions, per-user activation, revocation and license visibility. Not included (yet):
 
-- Auto-activation plugins for Adobe InDesign / Illustrator / Photoshop, Affinity, QuarkXPress (activating missing fonts when a document opens)
+- Plugins for QuarkXPress, CorelDRAW and Office (InDesign, Photoshop, Illustrator and Affinity are covered)
 - InDesign Server / prepress integrations
 - Font corruption reports (fonts installed outside typehaus are found by the optional inventory scan, but not repaired or removed)
 - Activating and browsing fonts directly from the tray app (today the library lives in the web UI)
 
-Contributions are very welcome, especially app plugins.
+Contributions are very welcome, especially plugins for more apps.
 
 ## Development
 
@@ -248,8 +280,9 @@ internal/server         HTTP API, auth, storage, embedded web UI (internal/serve
 internal/agent          sync engine, per-OS activation and autostart, controller
 internal/agent/tray     tray / menu-bar UI
 internal/agent/ui       local agent window (127.0.0.1)
+internal/adobeplugins   InDesign, Photoshop (UXP) and Illustrator (CEP) panels
 internal/brand          the typehaus mark: pixel-snapped icon renderer, ICO/SVG output
-internal/fontmeta       dependency-free OpenType name/OS2 table reader
+internal/fontmeta       dependency-free OpenType reader, WOFF/WOFF2 encoder
 internal/protocol       agent ⇄ server wire format
 ```
 

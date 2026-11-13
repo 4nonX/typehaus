@@ -115,7 +115,7 @@ func (c *Controller) InstallAdobePlugin(ctx context.Context, id string) (string,
 		}
 		c.addEvent("info", "Installed the typehaus panel for "+plug.App)
 		c.notify()
-		return fmt.Sprintf("Installed. Restart %s, then open Window → %s.", plug.App, panelMenu(plug)), nil
+		return fmt.Sprintf("Installed. Restart %s, then open %s.", plug.App, panelMenu(plug)), nil
 	}
 	if err := OpenURL(file); err != nil {
 		return "", errors.New("Creative Cloud's plugin installer wasn't found – is the Creative Cloud app installed?")
@@ -125,7 +125,7 @@ func (c *Controller) InstallAdobePlugin(ctx context.Context, id string) (string,
 
 func panelMenu(p *adobeplugins.Plugin) string {
 	if p.Format == "zxp" {
-		return "Extensions (Legacy) → typehaus"
+		return "Window → Extensions (Legacy) → typehaus"
 	}
 	return "Plugins → typehaus"
 }

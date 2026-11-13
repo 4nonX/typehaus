@@ -168,7 +168,9 @@ type apiChecker struct {
 	seen      map[string]bool
 }
 
-func (c *apiChecker) add(format string, a ...any) { c.problems = append(c.problems, fmt.Sprintf(format, a...)) }
+func (c *apiChecker) add(format string, a ...any) {
+	c.problems = append(c.problems, fmt.Sprintf(format, a...))
+}
 
 func apiBreaks(base, cur map[string]any) []string {
 	comp := func(s map[string]any) map[string]any {

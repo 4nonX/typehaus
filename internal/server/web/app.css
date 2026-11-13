@@ -56,6 +56,13 @@ nav.main a {
 nav.main a:hover { background: var(--paper-2); }
 nav.main a.active { background: var(--ink); color: var(--paper); }
 .who { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+@media (max-width: 1360px) {
+  header.top { gap: 16px; padding: 14px 20px; }
+  nav.main { gap: 0; }
+  nav.main a { padding: 6px 9px; font-size: 13.5px; }
+  .who { gap: 6px; }
+}
+@media (max-width: 1240px) { .who .whoname { display: none; } }
 main { padding: 28px; max-width: 1400px; width: 100%; margin: 0 auto; }
 h1 { font: 500 34px/1.1 var(--serif); margin: 0 0 6px; letter-spacing: -0.01em; }
 h2 { font: 500 22px/1.2 var(--serif); margin: 28px 0 12px; }

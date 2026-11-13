@@ -158,7 +158,7 @@ function render() {
         <a class="brand" href="#/library">typehaus<i></i></a>
         <nav class="main">${nav}</nav>
         <div class="who">
-          <span>${esc(S.me.display_name || S.me.username)}${S.me.is_admin ? ' <span class="badge">admin</span>' : ''}</span>
+          <span class="whoname" title="${esc(S.me.display_name || S.me.username)}">${esc(S.me.display_name || S.me.username)}${S.me.is_admin ? ' <span class="badge">admin</span>' : ''}</span>
           <button class="btn ghost sm theme-btn" id="theme"></button>
           <button class="btn ghost sm" id="acct">Account</button>
           <button class="btn ghost sm" id="logout">Log out</button>
@@ -1111,7 +1111,7 @@ async function renderDevices(page) {
       <div class="plist">${plugins.map((p) => `<div class="pitem"><b>${esc(p.app)}</b><span class="small muted">${PLUGIN_NEEDS[p.id] || ''}</span>
         ${p.available ? `<a class="btn sm" href="${esc(p.url)}" download>Download .${esc(p.format)}</a>` : '<span class="small muted">in the release builds</span>'}</div>`).join('')}
         <div class="pitem"><b>Affinity</b><span class="small muted">3.3 or later</span><span class="small">No plugin needed</span></div></div>
-      <p class="small muted">Install: open the typehaus app's window and choose <b>Install</b> next to the app – or double-click the downloaded file and Creative Cloud installs it
+      <p class="small muted">Install: open the typehaus app's window and choose <b>Install panel</b> next to the app – or double-click a downloaded .ccx file and Creative Cloud installs it
         (it may point out that the plugin isn't from the Adobe Marketplace). Affinity: turn on <b>Settings → Model Context Protocol → Enable MCP server</b> and restart Affinity; typehaus connects by itself.</p>
     </div>
     <div class="row" style="margin-top:28px"><h2 style="margin:0">${showAll ? 'All devices' : 'Your devices'}</h2><span class="spacer"></span>
