@@ -214,7 +214,7 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	psSeen := map[string]bool{}
 	var gate *deviceLicenseGate
 	if d != nil {
-		gate = &deviceLicenseGate{s: s, device: d.ID, user: d.UserID, nowT: time.Now(),
+		gate = &deviceLicenseGate{s: s, device: d.ID, machine: d.Machine, user: d.UserID, nowT: time.Now(),
 			holders: map[int64]map[int64]bool{}, people: map[int64]map[int64]bool{}}
 	}
 	type row struct {

@@ -204,6 +204,9 @@ CREATE TABLE font_requests (
 );
 CREATE INDEX font_requests_status ON font_requests(status);
 `,
+	// 8: direct downloads of commercial fonts are opt-in: a downloaded copy
+	// is outside typehaus' control (not counted, not removed on revocation)
+	`UPDATE licenses SET downloadable = 0 WHERE kind = 'commercial';`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

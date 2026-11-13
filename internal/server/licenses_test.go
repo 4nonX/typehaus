@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/4nonX/typehaus/internal/protocol"
 )
 
 func uploadDoc(t *testing.T, c *client, licID int64, name string, data []byte, shared bool) int {
@@ -256,6 +258,50 @@ func TestDetectOpenLicense(t *testing.T) {
 	for _, text := range []string{"", "Commercial license. See https://foundry.example/eula", "All rights reserved."} {
 		if got := detectOpenLicense(text, ""); got != nil {
 			t.Errorf("%q: unexpected %s", text, got.SPDX)
+		}
+	}
+}
+
+// Fonts under per-user licenses on computers that install for all users:
+// enforced licenses stay off those computers, others are flagged.
+func TestAllUsersInstalls(t *testing.T) {
+	_, ts, admin := newTestServer(t)
+	uploadFiles(t, admin, map[string][]byte{"Poppins-Regular.ttf": fixture(t, "Poppins-Regular.ttf")})
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	font := fonts[0].ID
+	var lic map[string]int64
+	admin.do("POST", "/api/licenses", map[string]any{"name": "Per user", "seats": 5, "enforce": true}, &lic)
+	admin.do("PATCH", "/api/fonts", map[string]any{"font_ids": []int64{font}, "license_id": lic["id"]}, nil)
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": []int64{font}}, nil)
+
+	enroll := func(platform string) string {
+		var code map[string]any
+		admin.do("POST", "/api/enroll-codes", nil, &code)
+		var er protocol.EnrollResponse
+		newClient(t, ts.URL).do("POST", "/api/agent/enroll", protocol.EnrollRequest{Code: code["code"].(string), Platform: platform}, &er)
+		return er.Token
+	}
+	user, machine := enroll("windows"), enroll("windows-machine")
+	if _, m := getManifest(t, ts, user); len(m.Fonts) != 1 {
+		t.Fatalf("per-user install: %+v", m.Fonts)
+	}
+	if _, m := getManifest(t, ts, machine); len(m.Fonts) != 0 {
+		t.Fatalf("enforced per-user license on an all-users computer: %+v", m.Fonts)
+	}
+
+	// not enforced: installed, but flagged
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"enforce": false}, nil)
+	_, m := getManifest(t, ts, machine)
+	if len(m.Fonts) != 1 {
+		t.Fatalf("unenforced: %+v", m.Fonts)
+	}
+	report(t, ts.URL, machine, []string{m.Fonts[0].SHA256})
+	var lics []licenseRow
+	admin.do("GET", "/api/licenses", nil, &lics)
+	for _, l := range lics {
+		if l.ID == lic["id"] && (l.Machines != 1 || l.status() != "installed for all users") {
+			t.Fatalf("all-users flag: machines=%d status=%q", l.Machines, l.status())
 		}
 	}
 }

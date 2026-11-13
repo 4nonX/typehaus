@@ -55,7 +55,8 @@ type licenseRow struct {
 	Fonts       int          `json:"fonts"`
 	Users       int          `json:"users"`
 	Devices     int          `json:"devices"`
-	Used        int          `json:"used"` // users or devices, per seat unit
+	Machines    int          `json:"machine_devices"` // computers installing it for all users
+	Used        int          `json:"used"`            // users or devices, per seat unit
 	Holder      bool         `json:"holder"`
 	Expired     bool         `json:"expired"`
 	ExpiresIn   *int         `json:"expires_in_days,omitempty"`
@@ -73,10 +74,18 @@ func (l *licenseRow) status() string {
 		return "over seats"
 	case l.ExpiresIn != nil && *l.ExpiresIn <= 30:
 		return "expires soon"
+	case l.SharedInstalls():
+		return "installed for all users"
 	case l.Full:
 		return "all seats in use"
 	}
 	return "ok"
+}
+
+// SharedInstalls: a per-user license installed for all users of some
+// computers – who uses it there can't be counted.
+func (l *licenseRow) SharedInstalls() bool {
+	return l.SeatUnit == "users" && l.Seats > 0 && l.Machines > 0
 }
 
 // expiry reports whether a term end date ("" = perpetual) has passed and
@@ -103,6 +112,8 @@ const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, 
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(DISTINCT a.user_id) FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id),
 	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256 WHERE f.license_id = l.id),
+	(SELECT COUNT(DISTINCT df.device_id) FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
+		JOIN devices d ON d.id = df.device_id WHERE f.license_id = l.id AND d.platform LIKE '%-machine'),
 	EXISTS(SELECT 1 FROM user_fonts a JOIN fonts f ON f.id = a.font_id WHERE f.license_id = l.id AND a.user_id = ?)
 	FROM licenses l`
 
@@ -123,7 +134,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 		var rights string
 		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download,
 			&l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
-			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Holder); err != nil {
+			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Machines, &l.Holder); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -382,6 +393,11 @@ func (s *Server) handleCreateLicense(w http.ResponseWriter, r *http.Request, u *
 	}
 	if _, ok := cols["rights"]; !ok {
 		cols["rights"] = "desktop"
+	}
+	if _, ok := cols["downloadable"]; !ok {
+		// downloaded copies are outside typehaus' control: opt-in for
+		// commercial licenses
+		cols["downloadable"] = boolInt(req.Kind != nil && *req.Kind == "open")
 	}
 	cols["created_at"] = now()
 	names, vals := sortedCols(cols)
@@ -865,6 +881,7 @@ func (s *Server) activationRefusals(userID int64, fontIDs []int64) (map[int64]bo
 type deviceLicenseGate struct {
 	s       *Server
 	device  int64
+	machine bool // installs for all users of the computer
 	user    int64
 	nowT    time.Time
 	holders map[int64]map[int64]bool
@@ -907,6 +924,11 @@ func (g *deviceLicenseGate) allow(lid sql.NullInt64, enforce bool, seats int, un
 		return true
 	}
 	if unit != "devices" {
+		if g.machine {
+			// every account on the computer could use it: per-person
+			// seats can't be kept there
+			return false
+		}
 		return g.seatHolders(lid.Int64, seats)[g.user]
 	}
 	h := g.holders[lid.Int64]
@@ -962,7 +984,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Status", "Enforced",
-		"Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "Terms URL", "Documents"})
+		"Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
 		if l.Seats > 0 {
@@ -978,7 +1000,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		}
 		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used),
 			l.status(), enforced, yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
-			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), l.URL, strings.Join(docs, "; ")})
+			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), l.URL, strings.Join(docs, "; ")})
 	}
 	if unassigned > 0 {
 		cw.Write([]string{"(no license assigned)", "", "", "", "", "", "", fmt.Sprintf("%d families", unassigned)})

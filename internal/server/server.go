@@ -350,6 +350,7 @@ type authDevice struct {
 	UserID   int64
 	User     string
 	Platform string // windows, darwin, linux (from enrollment; "-machine" stripped)
+	Machine  bool   // installs for all users of the computer (Windows service)
 	Agent    string // agent version from the User-Agent header
 }
 
@@ -389,6 +390,7 @@ func (s *Server) device(h func(http.ResponseWriter, *http.Request, *authDevice))
 			writeErr(w, http.StatusUnauthorized, "device not enrolled or revoked")
 			return
 		}
+		d.Machine = strings.HasSuffix(d.Platform, "-machine")
 		d.Platform = strings.TrimSuffix(d.Platform, "-machine")
 		if ua := r.Header.Get("User-Agent"); strings.HasPrefix(ua, "typehaus-agent/") {
 			d.Agent, _, _ = strings.Cut(strings.TrimPrefix(ua, "typehaus-agent/"), " ")

@@ -954,7 +954,7 @@ const RIGHTS = {
 
 function licenseAttention() {
   if (!S.me?.is_admin) return [];
-  return S.lib.licenses.filter((l) => l.expired || l.over || (l.expires_in_days != null && l.expires_in_days <= 30));
+  return S.lib.licenses.filter((l) => l.expired || l.over || sharedInstalls(l) || (l.expires_in_days != null && l.expires_in_days <= 30));
 }
 
 // the warning dot on the Licenses tab
@@ -988,8 +988,12 @@ function licenseBadge(l) {
   return `<span class="badge ${l.kind === 'open' ? 'open' : ''}" title="${tip}">${esc(l.name)}</span>`;
 }
 
+// a per-user license installed for all users of some computers
+const sharedInstalls = (l) => l.seat_unit === 'users' && l.seats > 0 && l.machine_devices > 0;
+
 function statusBadges(l) {
   const b = [];
+  if (sharedInstalls(l)) b.push(`<span class="badge warn" title="Installed for all users on ${plural(l.machine_devices, 'computer')} – who uses it there can't be counted per person">all-users installs</span>`);
   if (l.expired) b.push('<span class="badge danger">expired</span>');
   else if (l.expires_in_days != null && l.expires_in_days <= 30) b.push(`<span class="badge warn">expires in ${plural(l.expires_in_days, 'day')}</span>`);
   if (l.over) b.push('<span class="badge danger">over seats</span>');
@@ -1098,7 +1102,8 @@ async function renderLicenses(page) {
     ${attention.length ? `<div class="alert warnbox">${attention.map((l) => `<div><b>${esc(l.name)}</b>: ${[
       l.expired && `expired on ${esc(l.expires_on)}`,
       !l.expired && l.expires_in_days != null && l.expires_in_days <= 30 && `expires in ${plural(l.expires_in_days, 'day')} (${esc(l.expires_on)})`,
-      l.over && `${l.used} ${l.seat_unit} for ${plural(l.seats, 'seat')}`].filter(Boolean).join(', ')}</div>`).join('')}</div>` : ''}
+      l.over && `${l.used} ${l.seat_unit} for ${plural(l.seats, 'seat')}`,
+      sharedInstalls(l) && `installed for all users on ${plural(l.machine_devices, 'computer')} – per-person seats can't be counted there (enforce the license to keep it off those computers)`].filter(Boolean).join(', ')}</div>`).join('')}</div>` : ''}
     ${lics.length ? `<table class="t lics"><thead><tr><th>License</th><th>Seats</th><th>Term</th><th class="num">Docs</th><th class="num">Families</th><th></th></tr></thead><tbody>
       ${lics.map((l) => `<tr>
         <td><a href="#" class="lname" data-open="${l.id}">${esc(l.name)}</a> ${l.kind === 'open' ? '<span class="badge open">open source</span>' : ''} ${statusBadges(l)}
@@ -1153,7 +1158,7 @@ function editLicense(l, done) {
       <label class="field">Purchased<input type="date" name="purchased_on" value="${esc(l?.purchased_on)}"></label>
       <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
     </div>
-    <label class="check"><input type="checkbox" name="downloadable" ${!l || l.downloadable ? 'checked' : ''}>
+    <label class="check"><input type="checkbox" name="downloadable" ${l ? (l.downloadable ? 'checked' : '') : ''}>
       <span><b>Allow direct download</b> – users may download the font files to install them themselves. Off: fonts are only installed through the typehaus app, which tracks every seat.</span></label>
     <label class="check"><input type="checkbox" name="enforce" ${l?.enforce ? 'checked' : ''}>
       <span><b>Enforce</b> – refuse activations when all seats are taken and remove the fonts from computers when the license has expired. Off: typehaus only warns.</span></label>
@@ -1167,7 +1172,8 @@ function editLicense(l, done) {
     wide: true,
     onSubmit: async (fd) => {
       const body = {
-        name: fd.get('name'), kind: fd.get('kind'), vendor: fd.get('vendor'), rights: fd.getAll('rights'),
+        name: fd.get('name'), kind: fd.get('kind'),
+        // (downloadable follows the type for new licenses, see below) vendor: fd.get('vendor'), rights: fd.getAll('rights'),
         seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on', downloadable: fd.get('downloadable') === 'on',
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
         reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),
@@ -1181,6 +1187,14 @@ function editLicense(l, done) {
       done();
     },
   });
+  // new licenses: open-source fonts may be downloaded, commercial ones not
+  // unless the EULA allows it
+  if (!l) {
+    const kind = $('[name=kind]', d), dl = $('[name=downloadable]', d);
+    let touched = false;
+    dl.addEventListener('change', () => { touched = true; });
+    kind.addEventListener('change', () => { if (!touched) dl.checked = kind.value === 'open'; });
+  }
   return d;
 }
 

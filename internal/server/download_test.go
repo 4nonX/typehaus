@@ -56,6 +56,15 @@ func TestDownloads(t *testing.T) {
 	// license's shared documents (not the private ones)
 	var lic map[string]int64
 	admin.do("POST", "/api/licenses", map[string]any{"name": "Demo EULA"}, &lic)
+	// commercial licenses don't allow direct downloads unless set
+	var lics []licenseRow
+	admin.do("GET", "/api/licenses", nil, &lics)
+	for _, l := range lics {
+		if l.Kind == "commercial" && l.Download || l.Kind == "open" && !l.Download {
+			t.Fatalf("downloads default: commercial off, open on: %+v", l)
+		}
+	}
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"downloadable": true}, nil)
 	admin.do("PATCH", "/api/fonts", map[string]any{"font_ids": []int64{byFam["Demo"]}, "license_id": lic["id"]}, nil)
 	uploadDoc(t, admin, lic["id"], "EULA.pdf", []byte("%PDF eula"), true)
 	uploadDoc(t, admin, lic["id"], "Invoice.pdf", []byte("%PDF invoice"), false)
