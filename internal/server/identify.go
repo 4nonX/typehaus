@@ -28,7 +28,7 @@ import (
 
 var (
 	whatFontIsURL = "https://www.whatfontis.com/api2/"
-	mixfontURL    = "https://api.mixfont.com/v1/api/lens"
+	mixfontURL    = "https://api.mixfont.com/v1/lens"
 	asposeURL     = "https://api.aspose.cloud"
 )
 
