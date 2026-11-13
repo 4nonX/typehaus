@@ -61,9 +61,35 @@ function savedSize() {
   return 30;
 }
 
+// list or grid of families, remembered per browser (Library and Find fonts)
+function savedView() {
+  try { return localStorage.getItem('typehaus.view') === 'grid' ? 'grid' : 'list'; } catch { return 'list'; }
+}
+function setView(v) {
+  S.view = v;
+  try { localStorage.setItem('typehaus.view', v); } catch {}
+}
+const PANGRAM = 'Sphinx of black quartz, judge my vow.';
+const VIEW_ICONS = {
+  grid: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+  list: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5 4h9M5 8h9M5 12h9"/><circle cx="2.3" cy="4" r=".6" fill="currentColor"/><circle cx="2.3" cy="8" r=".6" fill="currentColor"/><circle cx="2.3" cy="12" r=".6" fill="currentColor"/></svg>',
+};
+function viewToggle() {
+  return `<span class="viewtg" role="group" aria-label="Display">${['grid', 'list'].map((v) =>
+    `<button type="button" class="${S.view === v ? 'active' : ''}" data-view="${v}" title="${v === 'grid' ? 'Grid' : 'List'}" aria-label="${v === 'grid' ? 'Grid' : 'List'}" aria-pressed="${S.view === v}">${VIEW_ICONS[v]}</button>`).join('')}</span>`;
+}
+function wireViewToggle(el, redraw) {
+  $$('[data-view]', el).forEach((b) => b.onclick = () => {
+    setView(b.dataset.view);
+    $$('[data-view]', el).forEach((x) => { x.classList.toggle('active', x.dataset.view === S.view); x.setAttribute('aria-pressed', x.dataset.view === S.view); });
+    redraw();
+  });
+}
+
 const S = {
   me: null,
   auth: null,
+  view: savedView(),
   lib: {
     fonts: [], collections: [], licenses: [], loaded: false,
     q: '', coll: 'all', preview: '', size: savedSize(), expanded: new Set(), selected: new Set(),
@@ -393,7 +419,8 @@ async function renderLibrary(page) {
             <input type="range" id="sz" min="6" max="96" step="1" value="${Math.min(96, Math.max(6, Math.round(L.size)))}" aria-label="Preview size">
             <label class="pt"><input type="number" id="szn" min="${SIZE_MIN}" max="${SIZE_MAX}" step="0.5" inputmode="decimal" value="${L.size}" aria-label="Preview size in points"><span>pt</span></label>
           </span>
-          <button class="btn sm" id="expandall">${L.expanded.size ? 'Collapse all' : 'Expand all'}</button>
+          <button class="btn sm" id="expandall" ${S.view === 'grid' ? 'hidden' : ''}>${L.expanded.size ? 'Collapse all' : 'Expand all'}</button>
+          ${viewToggle()}
         </div>
         <div id="allrow"></div>
         <div id="bulk"></div>
@@ -422,7 +449,7 @@ async function renderLibrary(page) {
     v = Math.round(v * 2) / 2;
     if (!(v >= SIZE_MIN && v <= SIZE_MAX)) return false;
     L.size = v;
-    $$('.family > .specimen, .style-row .specimen', page).forEach((el) => el.style.fontSize = v + 'pt');
+    $$('.family > .specimen, .style-row .specimen, .tile > .specimen', page).forEach((el) => el.style.fontSize = v + 'pt');
     if (from !== sz) sz.value = Math.min(96, Math.max(6, Math.round(v)));
     if (from !== szn) szn.value = v;
     try { localStorage.setItem('typehaus.size', v); } catch {}
@@ -436,6 +463,7 @@ async function renderLibrary(page) {
     setSize(Number.isFinite(v) ? Math.min(SIZE_MAX, Math.max(SIZE_MIN, v)) : L.size);
   };
   szn.onkeydown = (e) => { if (e.key === 'Enter') szn.blur(); };
+  wireViewToggle(page, () => { $('#expandall', page).hidden = S.view === 'grid'; drawFamilies(); });
   $('#expandall', page).onclick = () => {
     if (L.expanded.size) L.expanded.clear();
     else groupFamilies(filteredFonts()).forEach((fam) => L.expanded.add(fam.name));
@@ -475,6 +503,10 @@ function drawFamilies() {
   const PAGE = 60;
   L.shown = Math.max(L.shown || PAGE, PAGE);
   const visibleFams = fams.slice(0, L.shown);
+  if (S.view === 'grid') {
+    drawFamilyGrid(box, fams, visibleFams);
+    return;
+  }
   box.innerHTML = visibleFams.map((fam) => {
     const open = L.expanded.has(fam.name);
     const allSel = fam.faces.every((f) => L.selected.has(f.id));
@@ -542,6 +574,49 @@ function drawFamilies() {
   $$('.selface', box).forEach((cb) => cb.onchange = () => {
     const id = +cb.closest('.style-row').dataset.id;
     cb.checked ? L.selected.add(id) : L.selected.delete(id);
+    drawFamilies();
+  });
+  $$('.specimen', box).forEach((el) => previewObserver.observe(el));
+  drawBulk();
+}
+
+// drawFamilyGrid shows the families as tiles: the text in the font, the name,
+// switching on and the details.
+function drawFamilyGrid(box, fams, visibleFams) {
+  const L = S.lib;
+  const admin = S.me.is_admin;
+  box.innerHTML = `<div class="fgrid">${visibleFams.map((fam) => {
+    const lic = fam.rep.license_id ? L.licenses.find((l) => l.id === fam.rep.license_id) : null;
+    const allSel = fam.faces.every((f) => L.selected.has(f.id));
+    const locked = fam.required === fam.faces.length;
+    return `<div class="tile ${fam.active ? 'on' : ''}" data-fam="${esc(fam.name)}">
+      ${admin ? `<input type="checkbox" class="selfam tsel" ${allSel ? 'checked' : ''} title="Select family" aria-label="Select ${esc(fam.name)}">` : ''}
+      <div class="specimen loading" data-font="${fam.rep.id}" data-def="${esc(PANGRAM)}" style="font-size:${L.size}pt">${esc(L.preview || PANGRAM)}</div>
+      <div class="tile-foot">
+        <button class="tname info" title="Details and license">${esc(fam.name)}</button>
+        <span class="meta">${plural(fam.faces.length, 'style')}${lic && lic.kind !== 'open' ? ` · ${esc(lic.name)}` : ''}</span>
+        <span class="spacer"></span>
+        ${locked ? `<label class="toggle locked" title="${esc(requiredTitle(fam.faces[0]))}"><input type="checkbox" checked disabled><span></span></label>`
+          : `<label class="toggle" title="Activate all styles"><input type="checkbox" class="actfam" ${fam.active === fam.faces.length ? 'checked' : ''}><span></span></label>`}
+      </div>
+    </div>`;
+  }).join('')}</div>` + (fams.length > L.shown ? `<div class="more" id="more">Showing ${L.shown} of ${fams.length} families…</div>` : '');
+  const more = $('#more', box);
+  if (more) {
+    const io = new IntersectionObserver((en) => {
+      if (en.some((e) => e.isIntersecting)) { io.disconnect(); L.shown += 60; drawFamilies(); }
+    }, { rootMargin: '600px' });
+    io.observe(more);
+  }
+  const famOf = (el) => fams.find((x) => x.name === el.closest('.tile').dataset.fam);
+  $$('.actfam', box).forEach((cb) => {
+    const fam = famOf(cb);
+    cb.indeterminate = fam.active > 0 && fam.active < fam.faces.length;
+    cb.onchange = () => setActive(fam.faces.filter((f) => !f.required).map((f) => f.id), fam.active < fam.faces.length);
+  });
+  $$('.info', box).forEach((b) => b.onclick = () => familyInfo(famOf(b)));
+  $$('.selfam', box).forEach((cb) => cb.onchange = () => {
+    famOf(cb).faces.forEach((f) => cb.checked ? L.selected.add(f.id) : L.selected.delete(f.id));
     drawFamilies();
   });
   $$('.specimen', box).forEach((el) => previewObserver.observe(el));
@@ -2244,6 +2319,7 @@ async function renderCatalog(box) {
       <select id="ccat"><option value="">All styles</option>${Object.entries(CAT_CATEGORIES).map(([k, v]) => `<option value="${k}" ${CAT.category === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       <select id="csrc"><option value="">All sources</option>${Object.entries(CAT_SOURCES).map(([k, v]) => `<option value="${k}" ${CAT.source === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       <input type="text" class="preview-text" id="ctext" placeholder="Type to preview" value="${esc(CAT.text)}">
+      ${viewToggle()}
     </div>
     <div id="cbulk"></div><div id="clist"><div class="more">Loading the catalog…</div></div>`;
   let list = [];
@@ -2266,7 +2342,24 @@ async function renderCatalog(box) {
     const el = $('#clist', box);
     if (!list.length) { el.innerHTML = '<div class="empty"><div class="big">Nothing found.</div>Try fewer words, or another style or source.</div>'; drawBulk(); return; }
     const shown = list.slice(0, CAT.shown);
-    el.innerHTML = `<p class="small muted">${plural(list.length, 'family', 'families')}</p>` + shown.map((f) => {
+    const grid = S.view === 'grid';
+    const sample = (f) => CAT.text || (grid ? PANGRAM : f.family);
+    if (grid) {
+      el.innerHTML = `<p class="small muted">${plural(list.length, 'family', 'families')}</p><div class="fgrid">` + shown.map((f) => {
+        const sel = S.me.is_admin && f.importable && !f.in_library;
+        return `<div class="tile cat" data-id="${esc(f.id)}">
+          ${sel ? `<input type="checkbox" class="tsel" data-sel="${esc(f.id)}" ${CAT.selected.has(f.id) ? 'checked' : ''} aria-label="Select ${esc(f.family)}">` : ''}
+          ${specimenFor(sample(f), null, f, 'specimen cspec')}
+          <div class="tile-foot"><a class="tname" href="${esc(f.page)}" target="_blank" rel="noopener noreferrer" title="${esc(CAT_SOURCES[f.source] || f.source)} ↗">${esc(f.family)}</a>
+            <span class="meta">${f.variable ? 'Variable' : f.styles ? plural(f.styles, 'style') : ''}</span><span class="spacer"></span>
+            ${f.in_library ? '<span class="badge open">in library</span>'
+              : S.me.is_admin && f.importable ? `<button class="btn sm" data-import="${esc(f.id)}">Add</button>`
+              : !S.me.is_admin && f.importable ? `<button class="btn sm" data-ask="${esc(f.family)}">Request</button>`
+              : `<span class="badge" title="${esc(f.reason)}">web only</span>`}</div>
+          <div class="tile-sub small muted">${esc(CAT_SOURCES[f.source] || f.source)} · ${esc(f.license)}</div>
+        </div>`;
+      }).join('') + '</div>' + (list.length > CAT.shown ? '<div class="more"><button class="btn" id="cmore">Show more</button></div>' : '');
+    } else el.innerHTML = `<p class="small muted">${plural(list.length, 'family', 'families')}</p>` + shown.map((f) => {
       const sel = S.me.is_admin && f.importable && !f.in_library;
       return `<div class="cfam">
         <div class="family-head">
@@ -2280,7 +2373,7 @@ async function renderCatalog(box) {
           ${S.me.is_admin && f.importable && !f.in_library ? `<button class="btn sm" data-import="${esc(f.id)}">Add to library</button>` : ''}
           ${!S.me.is_admin && f.importable && !f.in_library ? `<button class="btn sm" data-ask="${esc(f.family)}">Request</button>` : ''}
         </div>
-        ${specimenFor(CAT.text || f.family, null, f, 'specimen cspec')}
+        ${specimenFor(sample(f), null, f, 'specimen cspec')}
         ${f.reason ? `<p class="small muted cnote">${esc(f.reason)}</p>` : ''}
       </div>`;
     }).join('') + (list.length > CAT.shown ? '<div class="more"><button class="btn" id="cmore">Show more</button></div>' : '');
@@ -2308,8 +2401,12 @@ async function renderCatalog(box) {
   // keep the specimen text in step with its family when typing
   $('#ctext', box).oninput = (e) => {
     CAT.text = e.target.value;
-    $$('.cfam', box).forEach((row, i) => { const s = $('.cspec', row); if (s && !s.classList.contains('catimg')) s.textContent = CAT.text || list[i]?.family || ''; });
+    $$('.cfam, .tile', box).forEach((row, i) => {
+      const s = $('.cspec', row);
+      if (s && !s.classList.contains('catimg')) s.textContent = CAT.text || (S.view === 'grid' ? PANGRAM : list[i]?.family || '');
+    });
   };
+  wireViewToggle(box, () => draw());
   await load();
 }
 

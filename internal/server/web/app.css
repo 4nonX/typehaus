@@ -403,3 +403,24 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .dplugins { margin-top: 18px; }
 .plist { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 12px 0; }
 .pitem { display: grid; gap: 4px; align-content: start; justify-items: start; border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+
+/* list / grid toggle and the grid of families */
+.viewtg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; margin-left: auto; }
+.viewtg button { background: none; border: 0; padding: 6px 9px; color: var(--ink-3); cursor: pointer; display: grid; place-items: center; }
+.viewtg button + button { border-left: 1px solid var(--rule); }
+.viewtg button.active { background: var(--paper-2); color: var(--ink); }
+.viewtg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 4px; }
+.tile { position: relative; display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--card); padding: 18px 18px 12px; min-height: 250px; }
+.tile.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
+.tile > .specimen { flex: 0 0 auto; margin: 0 0 10px; padding-right: 22px; overflow: hidden; line-height: 1.3; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; align-self: stretch; }
+.tile > .specimen.catimg { display: block; }
+.tile > .specimen.catimg img { display: block; max-width: 100%; height: auto; max-height: 120px; }
+.tile-foot { margin-top: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tile-foot .meta { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+.tname { flex-shrink: 0; max-width: 75%; font: 600 14px var(--sans); color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; text-align: left; }
+.tname:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tile-sub { margin-top: 2px; }
+.tsel { position: absolute; top: 10px; right: 10px; }
+[hidden] { display: none !important; }
