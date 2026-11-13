@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-13
+
 ### Fixed
 - **A font preview could show a different font's cached file, or none.** Browsers kept preview files for a day by the font's number, and the number of a deleted font is reused by the next one added. A browser that had cached the old font kept showing it – or "no preview", if the old one couldn't be previewed. Preview addresses now carry the file's checksum; without it the browser checks back with the server.
 
