@@ -6,6 +6,17 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Added
+- **Collections that install themselves.** A collection can now be *installed automatically*: its fonts arrive on every member's computers without being switched on, and leave when someone leaves the group or the collection. Members see them as installed (with the collection's name) and can't switch them off individually. The collection dialog previews how many people, computers and license seats a change affects and refuses changes that would exceed an enforced license.
+- **Font requests.** Users request a missing font (with what it's for) from the library; admins see open requests under *Requests* and answer them (added / declined with a note). Requesters get a badge when an answer arrives.
+- **Usage history.** typehaus records each license's daily peak of users, computers and all-users installs. The Licenses page shows the 12-month peak, flags licenses that went over their seats during the year, and draws the usage in the license detail; *Usage history* exports it as CSV, and the license CSV gained peak and all-users columns.
+- **Offline limit per license.** For licenses that allow use only while connected: after the set number of days without contact to the server, computers remove the license's fonts (also when the clock is set back) and install them again once the server is reachable. The app shows paused fonts.
+- **Inventory scan (opt-in, `TYPEHAUS_INVENTORY=true`).** The app reports once a day which fonts are installed on the computer outside typehaus – names, sizes and checksums, never the files. The Licenses page lists copies of library families that are not open source, per computer, and marks byte-identical copies. `typehaus-agent inventory` shows the same list locally.
+
+### Changed
+- **Commercial licenses no longer allow direct downloads by default.** New commercial licenses start with downloads off, and **existing commercial licenses are switched to no-download by this update** – turn it back on per license where the EULA allows it. Open-source licenses are unaffected.
+- Computers that install fonts for all users (Windows service) never receive fonts of an enforced per-user license: such an install can't be attributed to a user. Licenses with all-users installs are flagged.
+
 ## [0.4.0] - 2026-11-12
 
 ### Added

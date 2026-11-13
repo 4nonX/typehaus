@@ -14,11 +14,14 @@ typehaus does the core of it, free:
 
 - **One library, every format.** Upload single files, ZIP archives or whole font folders: TrueType, OpenType (including variable and colour fonts), collections, WOFF/WOFF2/EOT, Mac suitcases, PostScript Type 1, Windows bitmap fonts, X11 bitmap fonts (full list [below](#supported-font-formats)). Metadata (family, style, weight, designer, foundry, embedding rights) is read straight from the font. Duplicates are detected by content hash. Font licenses never block an upload; embedding restrictions are shown as a badge.
 - **Collections & groups.** Decide who sees what. "Brand fonts" for everyone, the licensed display family for the design group only.
+- **Fonts that are simply there.** A collection is either *available* (members switch fonts on as needed) or *installed automatically*: every member's computers get its fonts without anyone lifting a finger, and they leave when someone leaves the group. Before saving, typehaus shows how many people, computers and license seats the change affects, and refuses it if an enforced license would run out of seats.
+- **Font requests.** Missing a font? Users ask for it in the web UI with what they need it for; admins answer (added, or declined with a reason), and the answer shows up for the requester.
 - **Activate from the browser.** Toggle a family or a single style. Every computer you enrolled installs it within a minute and removes it when you turn it off.
 - **No admin rights.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux.
 - **Or download the files.** Prefer the traditional way? Download a single style, a whole family or a selection (ZIP, with Type 1 metrics files and the license documents) and install it yourself. Licenses can forbid this; enforced licenses only allow downloads to people holding a seat. `TYPEHAUS_DOWNLOADS=false` turns it off for everyone but admins.
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
 - **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
+- **Built for audits.** Usage is recorded daily per license, so you can show the *peak* of the last 12 months (not just today's count) in a chart, the list and the CSV. Commercial licenses don't allow direct downloads unless you say so. Installs "for all users of a computer" are flagged, because a per-user license can't count them – typehaus never puts an enforced per-user license there. For licenses that only allow use while connected, an **offline limit** removes the fonts from a computer that hasn't reached the server for a set number of days; they return once it is back. The optional **inventory scan** lists copies of licensed library fonts that were installed on computers by other means.
 - **Activity log.** Uploads, activations, enrollments, sign-ins and admin changes.
 - **Single sign-on.** Optional OIDC (Authentik, Keycloak, Authelia, Zitadel, Entra ID, Google…) with group sync and admin mapping. Local accounts work out of the box.
 - **Small and boring to run.** A single Go binary with an embedded web UI. SQLite plus a content-addressed file store in one `/data` volume. Distroless image, no external services.
@@ -131,6 +134,7 @@ typehaus-agent autostart enable
 | `run` | Sync continuously without any UI (servers, scripts). |
 | `sync [--force]` | Sync once. `--force` re-verifies every installed file. |
 | `status` | Show the server, user, last sync and installed fonts. |
+| `inventory [--send]` | List the fonts installed outside typehaus; `--send` reports them to the server (when the server collects inventories – the app does it by itself once a day). |
 | `unenroll` | Remove all fonts typehaus installed, disable autostart, forget the enrollment. |
 | `machine enroll\|install\|status\|sync\|uninstall` | Windows only, as administrator: fonts for all users (see above). |
 
@@ -144,11 +148,11 @@ typehaus-agent autostart enable
 
 Behaviour worth knowing:
 
-- **Offline:** if the server is unreachable, fonts stay active and the agent retries with backoff.
+- **Offline:** if the server is unreachable, fonts stay active and the agent retries with backoff. Exception: fonts whose license has an *offline limit* are paused after that many days without contact (or when the clock is set back) and come back with the next successful sync.
 - **Revoked device or disabled user:** the agent removes everything it installed and returns to "not connected".
 - **Fonts in use:** a font that can't be removed because an application has it open (Windows) is retried on every sync.
 - **Integrity:** every download is verified against its SHA-256. Missing or damaged files are reinstalled automatically.
-- Only files the agent installed itself are ever touched. Your own fonts are left alone.
+- Only files the agent installed itself are ever touched. Your own fonts are left alone. (If the server enables the inventory scan, their names and checksums are reported once a day – never the files.)
 - **Signing:** the release pipeline signs Windows builds (SignPath Foundation) and signs and notarizes macOS builds (Apple Developer ID) once the credentials are configured; see [docs/signing.md](docs/signing.md). Until then, Windows SmartScreen asks once (*More info → Run anyway*). On macOS, move typehaus.app to *Applications* first; then on macOS 15+ open it once and go to *System Settings → Privacy & Security → Open Anyway*, or on older macOS right-click → *Open*.
 - **Updates:** when the server runs a newer version, the app shows *Update available* in its menu and window. The new download replaces the running app and takes over *Start at login*.
 - **Account disabled:** the app removes its fonts but stays connected; they come back automatically when the account is enabled again. Revoking a device or deleting the user disconnects it for good.
@@ -171,6 +175,7 @@ All settings are environment variables.
 | `TYPEHAUS_POLL_SECONDS` | `60` | How often agents check for changes (min. 10) |
 | `TYPEHAUS_MAX_UPLOAD_MB` | `512` | Max size of one upload request |
 | `TYPEHAUS_DOWNLOADS` | `true` | Let users download font files directly (admins always can). Per-license setting on top. Downloaded fonts are outside typehaus' control: they aren't removed on revocation. |
+| `TYPEHAUS_INVENTORY` | `false` | Ask the apps to report, once a day, the fonts installed on each computer outside typehaus (names, sizes, checksums – never the files). Copies of licensed library fonts are listed on the Licenses page. Tell your users before you turn it on. |
 | `TYPEHAUS_LOCAL_LOGIN` | `true` | Set `false` to allow SSO only (requires `TYPEHAUS_OIDC_GROUPS_CLAIM` and `TYPEHAUS_OIDC_ADMIN_GROUP`) |
 | `TYPEHAUS_AGENTS_DIR` | `/app/agents` (image) | Agent binaries offered on the Devices page |
 
@@ -199,7 +204,7 @@ Everything lives in `/data`: `typehaus.db` (SQLite) and `fonts/` (content-addres
 - Web sessions use HttpOnly, SameSite cookies. State-changing API calls require a custom header (CSRF protection). Strict CSP.
 - Device tokens and enrollment codes are stored only as SHA-256 hashes. Enrollment codes are single use and expire after 15 minutes.
 - Agents can only download fonts that are currently active **and** visible to their user.
-- Fonts are validated as TrueType/OpenType before they are stored. WOFF/WOFF2 web fonts are rejected because desktops can't install them.
+- Uploads are validated as fonts before they are stored. Web and Mac container formats (WOFF/WOFF2/EOT, suitcases) are converted to plain TrueType/OpenType first.
 
 Found a vulnerability? Please open a private security advisory on GitHub rather than a public issue.
 
@@ -209,7 +214,7 @@ typehaus covers the core workflow: central library, permissions, per-user activa
 
 - Auto-activation plugins for Adobe InDesign / Illustrator / Photoshop, Affinity, QuarkXPress (activating missing fonts when a document opens)
 - InDesign Server / prepress integrations
-- Conflict detection against fonts installed outside typehaus (system fonts), font corruption reports
+- Font corruption reports (fonts installed outside typehaus are found by the optional inventory scan, but not repaired or removed)
 - Activating and browsing fonts directly from the tray app (today the library lives in the web UI)
 
 Contributions are very welcome, especially app plugins.
