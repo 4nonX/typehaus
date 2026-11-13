@@ -54,6 +54,27 @@ type Manifest struct {
 	PollSeconds     int            `json:"poll_seconds"`
 	ServerVersion   string         `json:"server_version,omitempty"`
 	Fonts           []ManifestFont `json:"fonts"`
+	// Inventory asks the agent to report the fonts installed outside
+	// typehaus (at most once a day) to POST /api/agent/inventory.
+	Inventory bool `json:"inventory,omitempty"`
+}
+
+// InventoryFont is one font file found outside typehaus on a device.
+type InventoryFont struct {
+	Path       string `json:"path"`
+	Scope      string `json:"scope"` // user | computer
+	Family     string `json:"family"`
+	Style      string `json:"style"`
+	FullName   string `json:"full_name"`
+	PostScript string `json:"postscript_name"`
+	Kind       string `json:"kind"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+}
+
+// InventoryReport lists every font file found outside typehaus.
+type InventoryReport struct {
+	Fonts []InventoryFont `json:"fonts"`
 }
 
 // Report tells the server what is actually installed on the device.

@@ -59,7 +59,7 @@ func main() {
 	srv := exec.Command(*serverBin)
 	srv.Env = append(os.Environ(),
 		"TYPEHAUS_DATA="+filepath.Join(tmp, "data"), "TYPEHAUS_LISTEN="+addr, "TYPEHAUS_BASE_URL="+base,
-		"TYPEHAUS_ADMIN_PASSWORD=e2e-password-123", "TYPEHAUS_POLL_SECONDS=10", "TYPEHAUS_TRUST_PROXY=false")
+		"TYPEHAUS_ADMIN_PASSWORD=e2e-password-123", "TYPEHAUS_POLL_SECONDS=10", "TYPEHAUS_TRUST_PROXY=false", "TYPEHAUS_INVENTORY=true")
 	srvLog, _ := os.Create(filepath.Join(tmp, "server.log"))
 	srv.Stdout, srv.Stderr = srvLog, srvLog
 	check(srv.Start())
@@ -130,6 +130,9 @@ func main() {
 
 	step("offline lease: fonts leave after the allowed time offline and come back")
 	inst = e.offlineLease(ids, inst)
+
+	step("inventory: fonts copied in by hand are reported, typehaus' own are not")
+	e.inventory(ids, inst, tmp)
 
 	step("deactivate and remove")
 	e.api("DELETE", "/api/activations", map[string]any{"font_ids": ids}, nil)
@@ -355,6 +358,57 @@ func (e *env) offlineLease(ids []int64, inst []installed) []installed {
 	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": 0}, nil)
 	e.api("DELETE", fmt.Sprintf("/api/licenses/%d", lic["id"]), nil, nil)
 	return back
+}
+
+// inventory copies a library font into a scanned folder by hand and checks
+// that the server lists it as an unmanaged copy of a licensed family, while
+// the files typehaus installed itself (also scanned) are left out.
+func (e *env) inventory(ids []int64, inst []installed, tmp string) {
+	if len(inst) == 0 {
+		fail("inventory needs installed fonts")
+	}
+	manual := filepath.Join(tmp, "manual-fonts")
+	check(os.MkdirAll(manual, 0o755))
+	var src string
+	for _, f := range inst {
+		if f.Kind == "" || f.Kind == "sfnt" {
+			src = f.Path
+		}
+	}
+	b, err := os.ReadFile(src)
+	check(err)
+	check(os.WriteFile(filepath.Join(manual, "copied-by-hand.ttf"), b, 0o644))
+	check(os.WriteFile(filepath.Join(manual, "notes.txt"), []byte("not a font"), 0o644))
+	saved := e.extra
+	e.extra = append(append([]string{}, saved...),
+		"TYPEHAUS_INVENTORY_DIRS="+manual+string(os.PathListSeparator)+filepath.Dir(src))
+	defer func() { e.extra = saved }()
+
+	out := e.agent("inventory")
+	if !strings.Contains(out, "1 font(s) installed outside typehaus") {
+		fail("expected exactly the copied font:\n%s", out)
+	}
+	var lic map[string]int64
+	e.api("POST", "/api/licenses", map[string]any{"name": "E2E commercial", "kind": "commercial"}, &lic)
+	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": lic["id"]}, nil)
+	e.agent("inventory", "--send")
+	var inv struct {
+		Unmanaged int `json:"unmanaged_files"`
+		Findings  []struct {
+			Family string `json:"family"`
+			Copies []struct {
+				Path  string `json:"path"`
+				Exact bool   `json:"exact"`
+			} `json:"copies"`
+		} `json:"findings"`
+	}
+	e.api("GET", "/api/inventory", nil, &inv)
+	if inv.Unmanaged != 1 || len(inv.Findings) != 1 || len(inv.Findings[0].Copies) != 1 || !inv.Findings[0].Copies[0].Exact {
+		fail("inventory on the server: %+v", inv)
+	}
+	fmt.Printf("ok: server lists %s as an unmanaged copy (%s)\n", inv.Findings[0].Family, inv.Findings[0].Copies[0].Path)
+	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": 0}, nil)
+	e.api("DELETE", fmt.Sprintf("/api/licenses/%d", lic["id"]), nil, nil)
 }
 
 func (e *env) state() map[string]any {

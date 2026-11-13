@@ -310,6 +310,7 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 			for _, e := range res.Errors {
 				c.addEvent("error", e.Message)
 			}
+			a.MaybeInventory(ctx)
 			c.update(func(s *Status) {
 				s.Fonts = c.installedCount()
 				s.LastSync = time.Now()

@@ -43,6 +43,10 @@ Usage:
       Sync once and exit.
   typehaus-agent status
       Show enrollment and installed fonts.
+  typehaus-agent inventory [--send]
+      List the fonts installed on this computer outside typehaus. --send also
+      reports them to the server (only if the server collects inventories;
+      the app does this by itself once a day).
   typehaus-agent unenroll
       Remove all fonts installed by typehaus, disable autostart and forget
       this enrollment.
@@ -88,6 +92,8 @@ func main() {
 		err = cmdSync(ctx, os.Args[2:])
 	case "status":
 		err = cmdStatus()
+	case "inventory":
+		err = cmdInventory(ctx, os.Args[2:])
 	case "autostart":
 		err = cmdAutostart(os.Args[2:])
 	case "unenroll":
@@ -269,6 +275,37 @@ func cmdRun(ctx context.Context) error {
 func hasConsole() bool {
 	fi, err := os.Stderr.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func cmdInventory(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("inventory", flag.ExitOnError)
+	send := fs.Bool("send", false, "report the fonts to the server")
+	fs.Parse(args)
+	cfg, err := agent.LoadConfig()
+	if err != nil {
+		return err
+	}
+	a, err := agent.New(cfg, consoleLogger())
+	if err != nil {
+		return err
+	}
+	if *send {
+		n, err := a.SendInventory(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Reported %d font(s) installed outside typehaus.\n", n)
+		return nil
+	}
+	fonts, err := a.Inventory(ctx)
+	if err != nil {
+		return err
+	}
+	for _, f := range fonts {
+		fmt.Printf("%-9s %-40s %s\n", f.Scope, f.FullName, f.Path)
+	}
+	fmt.Printf("%d font(s) installed outside typehaus.\n", len(fonts))
+	return nil
 }
 
 func cmdSync(ctx context.Context, args []string) error {

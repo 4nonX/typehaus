@@ -280,3 +280,6 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .uchart .tip { position: absolute; top: -6px; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; font-size: 12px; pointer-events: none; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
 .warnt { color: var(--warn); }
 .two > .hint { margin: 1.4em 0 0; line-height: 1.45; }
+.inv td { vertical-align: top; }
+.inv .copy + .copy { margin-top: 8px; }
+.inv .path { font: 12px/1.4 var(--mono); color: var(--ink-3); word-break: break-all; }

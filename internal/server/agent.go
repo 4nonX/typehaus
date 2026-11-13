@@ -281,7 +281,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		return
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%d|%s|%d|%s|", protocol.Version, d.User, s.cfg.PollSeconds, Version)
+	fmt.Fprintf(h, "%d|%s|%d|%s|%t|", protocol.Version, d.User, s.cfg.PollSeconds, Version, s.cfg.Inventory)
 	for _, f := range fonts {
 		fmt.Fprintf(h, "%s%s%s%d", f.SHA256, f.Filename, f.Kind, f.LeaseDays)
 		for _, e := range f.Extras {
@@ -300,6 +300,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		PollSeconds:     s.cfg.PollSeconds,
 		ServerVersion:   Version,
 		Fonts:           fonts,
+		Inventory:       s.cfg.Inventory,
 	})
 }
 

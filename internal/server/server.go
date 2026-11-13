@@ -57,6 +57,8 @@ type Config struct {
 
 	// Downloads lets users download font files directly (admins always can).
 	Downloads bool
+	// Inventory asks agents to report fonts installed outside typehaus.
+	Inventory bool
 }
 
 // ConfigFromEnv builds a Config from TYPEHAUS_* variables.
@@ -81,6 +83,7 @@ func ConfigFromEnv() Config {
 		OIDCAutoCreate:   envBool("TYPEHAUS_OIDC_AUTO_CREATE", true),
 		AgentsDir:        env("TYPEHAUS_AGENTS_DIR", "./agents"),
 		Downloads:        envBool("TYPEHAUS_DOWNLOADS", true),
+		Inventory:        envBool("TYPEHAUS_INVENTORY", false),
 	}
 	c.SecureCookies = envBool("TYPEHAUS_SECURE_COOKIES", strings.HasPrefix(c.BaseURL, "https://"))
 	if c.PollSeconds < 10 {
@@ -183,6 +186,8 @@ func (s *Server) janitor(ctx context.Context) {
 		s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, n)
 		s.db.Exec(`DELETE FROM enroll_codes WHERE expires_at < ?`, n)
 		s.recordUsage()
+		// devices that stopped reporting (scan switched off, agent gone)
+		s.db.Exec(`DELETE FROM device_inventory WHERE device_id IN (SELECT id FROM devices WHERE inventory_at < ?)`, n-30*86400)
 		tmp := filepath.Join(s.cfg.DataDir, "tmp")
 		if ents, err := os.ReadDir(tmp); err == nil {
 			for _, e := range ents {
@@ -282,6 +287,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/agent/manifest", s.device(s.handleAgentManifest))
 	mux.Handle("GET /api/agent/fonts/{sha}", s.device(s.handleAgentFont))
 	mux.Handle("POST /api/agent/report", s.device(s.handleAgentReport))
+	mux.Handle("POST /api/agent/inventory", s.device(s.handleAgentInventory))
+	mux.Handle("GET /api/inventory", s.admin(s.handleInventory))
 
 	// agent binaries (public: open-source, needed before a device can authenticate)
 	mux.HandleFunc("GET /api/downloads", s.handleListDownloads)

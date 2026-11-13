@@ -221,6 +221,25 @@ CREATE TABLE license_usage (
 	// 10: offline lease – fonts of this license leave a device after this many
 	// days without contact to the server (0 = keep them while offline)
 	`ALTER TABLE licenses ADD COLUMN lease_days INTEGER NOT NULL DEFAULT 0;`,
+	// 11: fonts found on devices outside typehaus (opt-in inventory scan)
+	`
+CREATE TABLE device_inventory (
+	device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+	path      TEXT NOT NULL,
+	scope     TEXT NOT NULL,
+	family    TEXT NOT NULL,
+	style     TEXT NOT NULL,
+	full_name TEXT NOT NULL,
+	ps_name   TEXT NOT NULL,
+	kind      TEXT NOT NULL,
+	sha256    TEXT NOT NULL,
+	size      INTEGER NOT NULL,
+	PRIMARY KEY (device_id, path, ps_name)
+);
+CREATE INDEX device_inventory_sha ON device_inventory(sha256);
+CREATE INDEX device_inventory_family ON device_inventory(family COLLATE NOCASE);
+ALTER TABLE devices ADD COLUMN inventory_at INTEGER;
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

@@ -129,6 +129,15 @@ func MachineInstalled() map[string]bool {
 	return out
 }
 
+// MachineFontPaths returns the files the machine-wide service installed.
+func MachineFontPaths() []string {
+	var out []string
+	for _, f := range readMachineFonts() {
+		out = append(out, f.Path)
+	}
+	return out
+}
+
 var (
 	sessionMu     sync.Mutex
 	sessionLoaded = map[string]bool{}

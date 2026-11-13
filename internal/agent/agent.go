@@ -79,6 +79,10 @@ type State struct {
 	// Paused lists fonts removed because their offline lease ran out; they
 	// are installed again by the next successful sync.
 	Paused []string `json:"paused,omitempty"`
+	// Inventory: the server asks for the fonts installed outside typehaus;
+	// InventoryAt is when they were last sent.
+	Inventory   bool      `json:"inventory,omitempty"`
+	InventoryAt time.Time `json:"inventory_at,omitempty"`
 }
 
 // ConfigDir returns the per-user directory for config and state (or the
@@ -381,6 +385,7 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	}
 	res.PollSeconds = m.PollSeconds
 	st.ServerVersion = m.ServerVersion
+	st.Inventory = m.Inventory
 
 	want := map[string]protocol.ManifestFont{}
 	machine := map[string]bool{}
@@ -715,6 +720,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			if len(res.Added)+len(res.Removed)+len(res.Errors) > 0 {
 				a.log.Info("sync complete", "added", len(res.Added), "removed", len(res.Removed), "errors", len(res.Errors))
 			}
+			a.MaybeInventory(ctx)
 		}
 		wait := interval
 		if backoff > 0 {

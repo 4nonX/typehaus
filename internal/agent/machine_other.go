@@ -23,6 +23,7 @@ func MachineSupported() bool                           { return false }
 func machineDir() (string, error)                      { return "", errNoMachineMode }
 func publishMachineFonts(*State)                       {}
 func MachineInstalled() map[string]bool                { return map[string]bool{} }
+func MachineFontPaths() []string                       { return nil }
 func LoadMachineFontsIntoSession()                     {}
 func IsElevated() bool                                 { return false }
 func InstallService() (string, error)                  { return "", errNoMachineMode }

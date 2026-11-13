@@ -1087,7 +1087,7 @@ async function familyInfo(fam) {
 // licenses (admin)
 // ---------------------------------------------------------------------------
 async function renderLicenses(page) {
-  const [lics, usage] = await Promise.all([api('GET', '/api/licenses'), api('GET', '/api/reports/usage')]);
+  const [lics, usage, inv] = await Promise.all([api('GET', '/api/licenses'), api('GET', '/api/reports/usage'), api('GET', '/api/inventory')]);
   S.lib.licenses = lics;
   updateNavDot();
   const meter = (l) => l.seats
@@ -1124,7 +1124,8 @@ async function renderLicenses(page) {
     ${usage.map((u) => `<tr><td><b>${esc(u.family)}</b></td><td>${u.license ? esc(u.license) : '<span class="muted small">unassigned</span>'}</td>
       <td class="num">${u.faces}</td><td title="${esc(u.user_names)}">${u.users}${u.user_names ? ` <span class="small muted">${esc(u.user_names.split(',').slice(0, 4).join(', '))}${u.user_names.split(',').length > 4 ? '…' : ''}</span>` : ''}</td>
       <td class="num">${u.devices}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Library is empty.</td></tr>'}
-    </tbody></table>`;
+    </tbody></table>
+    ${inventorySection(inv)}`;
   const refresh = () => { S.lib.loaded = false; return renderLicenses(page).catch(fail); };
   $('#new', page).onclick = () => editLicense(null, refresh);
   $('#detect', page).onclick = async () => {
@@ -1141,6 +1142,26 @@ async function renderLicenses(page) {
     confirmDialog('Delete license', `Delete <b>${esc(l.name)}</b> and its ${plural(l.documents.length, 'document')}? Fonts stay in the library and become unassigned.`,
       async () => { await api('DELETE', `/api/licenses/${l.id}`); refresh(); });
   });
+}
+
+// Fonts the computers reported as installed outside typehaus (opt-in scan).
+function inventorySection(inv) {
+  const head = '<h2>Installed outside typehaus</h2>';
+  if (!inv.enabled) {
+    return `${head}<p class="small muted">Off. With <code>TYPEHAUS_INVENTORY=true</code> on the server, the typehaus app on each computer reports once a day which fonts were installed by other means – names and checksums only, never the files. Copies of licensed library fonts then show up here.</p>`;
+  }
+  if (!inv.devices_scanned) return `${head}<p class="small muted">Waiting for the first computers to report – the typehaus app scans once a day.</p>`;
+  const sub = `<p class="small muted">${plural(inv.devices_scanned, 'computer')} reported · ${plural(inv.unmanaged_files, 'font')} installed outside typehaus. Listed below: copies of library families that are not open source – they use a license without being counted.</p>`;
+  if (!inv.findings.length) return `${head}${sub}<p><span class="badge open">none found</span> No copies of licensed library fonts.</p>`;
+  return `${head}${sub}
+    <table class="t inv"><thead><tr><th>Family</th><th>License</th><th class="num">Computers</th><th>Where</th></tr></thead><tbody>
+    ${inv.findings.map((f) => `<tr><td><b>${esc(f.family)}</b></td>
+      <td>${f.license_id ? `<a href="#" data-open="${f.license_id}">${esc(f.license)}</a>` : '<span class="muted small">unassigned</span>'}</td>
+      <td class="num">${f.devices}</td>
+      <td>${f.copies.map((c) => `<div class="copy"><b>${esc(c.device)}</b> <span class="muted small">${esc(c.user)} · ${c.scope === 'computer' ? 'all users' : 'this user'} · scanned ${ago(c.scanned_at)}</span>
+        ${c.exact ? '<span class="badge warn" title="Byte-identical to the file in the typehaus library">exact copy</span>' : `<span class="badge" title="Same family name, different file – another version or a different cut">other file${c.style ? ' · ' + esc(c.style) : ''}</span>`}
+        <div class="path" title="${esc(c.path)}">${esc(c.path)}</div></div>`).join('')}</td></tr>`).join('')}
+    </tbody></table>`;
 }
 
 function editLicense(l, done) {
