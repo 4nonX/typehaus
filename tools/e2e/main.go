@@ -128,6 +128,9 @@ func main() {
 		fail("status output unexpected:\n%s", out)
 	}
 
+	step("offline lease: fonts leave after the allowed time offline and come back")
+	inst = e.offlineLease(ids, inst)
+
 	step("deactivate and remove")
 	e.api("DELETE", "/api/activations", map[string]any{"font_ids": ids}, nil)
 	e.agent("sync")
@@ -294,6 +297,72 @@ func (e *env) installed(dir string) []installed {
 		out = append(out, f)
 	}
 	return out
+}
+
+// offlineLease gives the fonts a license with a one-day offline lease, makes
+// the server unreachable with the last contact two days ago, and checks that
+// the fonts are removed – and installed again once the server is back.
+func (e *env) offlineLease(ids []int64, inst []installed) []installed {
+	var lic map[string]int64
+	e.api("POST", "/api/licenses", map[string]any{"name": "E2E lease", "kind": "commercial", "lease_days": 1}, &lic)
+	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": lic["id"]}, nil)
+	e.agent("sync", "--force")
+	for _, f := range e.state()["fonts"].(map[string]any) {
+		if d, _ := f.(map[string]any)["lease_days"].(float64); d != 1 {
+			fail("agent did not record the lease: %v", f)
+		}
+	}
+
+	cfgPath := filepath.Join(e.home, "agent.json")
+	orig, err := os.ReadFile(cfgPath)
+	check(err)
+	var cfg map[string]any
+	check(json.Unmarshal(orig, &cfg))
+	cfg["server"] = "http://127.0.0.1:9" // nothing listens there
+	b, _ := json.Marshal(cfg)
+	check(os.WriteFile(cfgPath, b, 0o600))
+	st := e.state()
+	st["last_sync"] = time.Now().Add(-49 * time.Hour).Format(time.RFC3339)
+	b, _ = json.Marshal(st)
+	check(os.WriteFile(filepath.Join(e.home, "state.json"), b, 0o600))
+
+	e.agentMayFail("sync")
+	if n := len(e.installed(e.home)); n != 0 {
+		fail("lease ended: expected 0 installed fonts, got %d", n)
+	}
+	for _, f := range inst {
+		verifyUserRemoved(e, f)
+	}
+	if p, _ := e.state()["paused"].([]any); len(p) != len(inst) {
+		fail("expected %d paused fonts, got %v", len(inst), p)
+	}
+	if out := e.agent("status"); !strings.Contains(out, "Paused:") {
+		fail("status should mention paused fonts:\n%s", out)
+	}
+
+	check(os.WriteFile(cfgPath, orig, 0o600))
+	e.agent("sync")
+	back := e.installed(e.home)
+	if len(back) != len(inst) {
+		fail("server back: expected %d fonts again, got %d", len(inst), len(back))
+	}
+	for _, f := range back {
+		verifyUserInstalled(e, f)
+	}
+	if p, _ := e.state()["paused"].([]any); len(p) != 0 {
+		fail("paused list should be empty after reconnect: %v", p)
+	}
+	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": 0}, nil)
+	e.api("DELETE", fmt.Sprintf("/api/licenses/%d", lic["id"]), nil, nil)
+	return back
+}
+
+func (e *env) state() map[string]any {
+	b, err := os.ReadFile(filepath.Join(e.home, "state.json"))
+	check(err)
+	var st map[string]any
+	check(json.Unmarshal(b, &st))
+	return st
 }
 
 func mustExist(p string) {

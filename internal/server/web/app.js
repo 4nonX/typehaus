@@ -1016,6 +1016,7 @@ function licenseCard(l) {
     <dl class="kv2">
       <dt>Allowed use</dt><dd>${l.rights.length ? `<div class="chips">${l.rights.map((r) => `<span class="chip">${esc(RIGHTS[r] || r)}</span>`).join('')}</div>` : '<span class="muted">Not recorded – check the license terms</span>'}</dd>
       <dt>Download</dt><dd>${l.downloadable ? 'Font files may be downloaded directly' : 'Only through the typehaus app – no direct download'}</dd>
+      ${l.lease_days ? `<dt>Offline use</dt><dd>Up to ${plural(l.lease_days, 'day')} without contact to the server, then the fonts pause until the computer is back online</dd>` : ''}
       <dt>Seats</dt><dd>${seatText(l)}${l.holder ? ' <span class="muted small">· you hold one</span>' : ''}</dd>
       <dt>Term</dt><dd>${termText(l)}${l.purchased_on ? ` <span class="muted small">· purchased ${esc(l.purchased_on)}</span>` : ''}</dd>
       ${l.reference ? `<dt>Reference</dt><dd>${esc(l.reference)}</dd>` : ''}
@@ -1161,6 +1162,10 @@ function editLicense(l, done) {
       <label class="field">Purchased<input type="date" name="purchased_on" value="${esc(l?.purchased_on)}"></label>
       <label class="field">Valid until (empty = perpetual)<input type="date" name="expires_on" value="${esc(l?.expires_on)}"></label>
     </div>
+    <div class="two">
+      <label class="field">Offline use (days, 0 = no limit)<input type="number" name="lease_days" min="0" max="365" value="${l?.lease_days ?? 0}"></label>
+      <p class="small muted hint">For licenses that allow use only while connected: after this many days without reaching the server, a computer removes these fonts. They return automatically once it is back online.</p>
+    </div>
     <label class="check"><input type="checkbox" name="downloadable" ${l ? (l.downloadable ? 'checked' : '') : ''}>
       <span><b>Allow direct download</b> – users may download the font files to install them themselves. Off: fonts are only installed through the typehaus app, which tracks every seat.</span></label>
     <label class="check"><input type="checkbox" name="enforce" ${l?.enforce ? 'checked' : ''}>
@@ -1176,7 +1181,7 @@ function editLicense(l, done) {
     onSubmit: async (fd) => {
       const body = {
         name: fd.get('name'), kind: fd.get('kind'),
-        // (downloadable follows the type for new licenses, see below) vendor: fd.get('vendor'), rights: fd.getAll('rights'),
+        vendor: fd.get('vendor'), rights: fd.getAll('rights'), lease_days: +fd.get('lease_days') || 0,
         seats: +fd.get('seats') || 0, seat_unit: fd.get('seat_unit'), enforce: fd.get('enforce') === 'on', downloadable: fd.get('downloadable') === 'on',
         purchased_on: fd.get('purchased_on'), expires_on: fd.get('expires_on'),
         reference: fd.get('reference'), url: fd.get('url'), notes: fd.get('notes'),

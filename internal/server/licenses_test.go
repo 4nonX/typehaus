@@ -351,3 +351,49 @@ func TestUsageHistory(t *testing.T) {
 		t.Fatalf("report lacks peak column: %s", body)
 	}
 }
+
+// The offline lease of a license reaches the agent with each font, and
+// changing it changes the manifest ETag so agents pick it up.
+func TestOfflineLease(t *testing.T) {
+	_, ts, admin := newTestServer(t)
+	uploadFiles(t, admin, map[string][]byte{"Poppins-Regular.ttf": fixture(t, "Poppins-Regular.ttf")})
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	font := fonts[0].ID
+	if st := admin.do("POST", "/api/licenses", map[string]any{"name": "Bad", "lease_days": -1}, nil); st != 400 {
+		t.Fatalf("negative lease: %d", st)
+	}
+	var lic map[string]int64
+	admin.do("POST", "/api/licenses", map[string]any{"name": "Connected only", "lease_days": 7}, &lic)
+	admin.do("PATCH", "/api/fonts", map[string]any{"font_ids": []int64{font}, "license_id": lic["id"]}, nil)
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": []int64{font}}, nil)
+	tok := enrollDevice(t, ts, admin)
+
+	etag := func() string {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/agent/manifest", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("ETag")
+	}
+	_, m := getManifest(t, ts, tok)
+	if len(m.Fonts) != 1 || m.Fonts[0].LeaseDays != 7 {
+		t.Fatalf("manifest lease: %+v", m.Fonts)
+	}
+	before := etag()
+	admin.do("PATCH", "/api/licenses/"+itoa(lic["id"]), map[string]any{"lease_days": 0}, nil)
+	if etag() == before {
+		t.Fatal("ETag must change with the lease")
+	}
+	if _, m = getManifest(t, ts, tok); m.Fonts[0].LeaseDays != 0 {
+		t.Fatalf("lease not cleared: %d", m.Fonts[0].LeaseDays)
+	}
+	var l licenseRow
+	admin.do("GET", "/api/licenses/"+itoa(lic["id"]), nil, &l)
+	if l.LeaseDays != 0 {
+		t.Fatalf("license lease_days: %d", l.LeaseDays)
+	}
+}

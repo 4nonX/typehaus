@@ -218,6 +218,9 @@ CREATE TABLE license_usage (
 	PRIMARY KEY (day, license_id)
 );
 `,
+	// 10: offline lease – fonts of this license leave a device after this many
+	// days without contact to the server (0 = keep them while offline)
+	`ALTER TABLE licenses ADD COLUMN lease_days INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

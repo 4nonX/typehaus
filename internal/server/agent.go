@@ -201,7 +201,7 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	args := append([]any{userID}, vargs...)
 	// newest first, so the duplicate filter below keeps the newest upload
 	rows, err := s.db.Query(`SELECT f.id, f.sha256, f.filename, f.family, f.style, f.full_name, f.format, f.size, f.postscript_name,
-		f.kind, f.platforms, f.extras, l.id, COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.seat_unit, ''), COALESCE(l.expires_on, '')
+		f.kind, f.platforms, f.extras, l.id, COALESCE(l.enforce, 0), COALESCE(l.seats, 0), COALESCE(l.seat_unit, ''), COALESCE(l.expires_on, ''), COALESCE(l.lease_days, 0)
 		FROM fonts f JOIN user_fonts a ON a.font_id = f.id AND a.user_id = ?
 		LEFT JOIN licenses l ON l.id = f.license_id
 		WHERE `+where+` ORDER BY f.id DESC`, args...)
@@ -229,7 +229,7 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 	for rows.Next() {
 		var x row
 		if err := rows.Scan(&x.m.ID, &x.m.SHA256, &x.m.Filename, &x.m.Family, &x.m.Style, &x.m.FullName, &x.m.Format, &x.m.Size, &x.ps,
-			&x.m.Kind, &x.platforms, &x.extras, &x.lid, &x.enforce, &x.seats, &x.unit, &x.expires); err != nil {
+			&x.m.Kind, &x.platforms, &x.extras, &x.lid, &x.enforce, &x.seats, &x.unit, &x.expires, &x.m.LeaseDays); err != nil {
 			return nil, err
 		}
 		all = append(all, x)
@@ -283,7 +283,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 	h := sha256.New()
 	fmt.Fprintf(h, "%d|%s|%d|%s|", protocol.Version, d.User, s.cfg.PollSeconds, Version)
 	for _, f := range fonts {
-		h.Write([]byte(f.SHA256 + f.Filename + f.Kind))
+		fmt.Fprintf(h, "%s%s%s%d", f.SHA256, f.Filename, f.Kind, f.LeaseDays)
 		for _, e := range f.Extras {
 			h.Write([]byte(e.SHA256 + e.Ext))
 		}

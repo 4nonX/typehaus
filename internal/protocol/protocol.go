@@ -35,6 +35,9 @@ type ManifestFont struct {
 	// Extras are companion files installed next to the font with the same
 	// base name, e.g. the .pfm/.afm metrics of a PostScript Type 1 font.
 	Extras []ManifestExtra `json:"extras,omitempty"`
+	// LeaseDays > 0: the agent removes the font after this many days without
+	// contact to the server and installs it again once the server is back.
+	LeaseDays int `json:"lease_days,omitempty"`
 }
 
 // ManifestExtra is a companion file of a font.

@@ -348,6 +348,9 @@ func cmdStatus() error {
 	for _, n := range names {
 		fmt.Println("  ", n)
 	}
+	if len(st.Paused) > 0 {
+		fmt.Printf("Paused:     %d font file(s) – the license allows only limited time offline; they return when the server is reachable\n", len(st.Paused))
+	}
 	return nil
 }
 

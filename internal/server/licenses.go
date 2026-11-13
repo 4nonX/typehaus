@@ -45,6 +45,7 @@ type licenseRow struct {
 	SeatUnit    string       `json:"seat_unit"` // users | devices
 	Enforce     bool         `json:"enforce"`
 	Download    bool         `json:"downloadable"`
+	LeaseDays   int          `json:"lease_days"` // 0 = fonts stay while a device is offline
 	Reference   string       `json:"reference,omitempty"` // admins only
 	URL         string       `json:"url"`
 	PurchasedOn string       `json:"purchased_on"`
@@ -111,7 +112,7 @@ func expiry(expiresOn string, at time.Time) (expired bool, daysLeft *int) {
 	return false, &d
 }
 
-const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable,
+const licenseSelect = `SELECT l.id, l.name, l.vendor, l.kind, l.spdx, l.rights, l.seats, l.seat_unit, l.enforce, l.downloadable, l.lease_days,
 	l.reference, l.url, l.purchased_on, l.expires_on, l.notes, l.created_at,
 	(SELECT COUNT(DISTINCT f.family) FROM fonts f WHERE f.license_id = l.id),
 	(SELECT COUNT(*) FROM fonts f WHERE f.license_id = l.id),
@@ -138,7 +139,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	for rows.Next() {
 		l := &licenseRow{Documents: []licenseDoc{}}
 		var rights string
-		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download,
+		if err := rows.Scan(&l.ID, &l.Name, &l.Vendor, &l.Kind, &l.SPDX, &rights, &l.Seats, &l.SeatUnit, &l.Enforce, &l.Download, &l.LeaseDays,
 			&l.Reference, &l.URL, &l.PurchasedOn, &l.ExpiresOn, &l.Notes, &l.CreatedAt,
 			&l.Families, &l.Fonts, &l.Users, &l.Devices, &l.Machines, &l.Holder); err != nil {
 			rows.Close()
@@ -306,6 +307,7 @@ type licenseReq struct {
 	SeatUnit    *string   `json:"seat_unit"`
 	Enforce     *bool     `json:"enforce"`
 	Download    *bool     `json:"downloadable"`
+	LeaseDays   *int      `json:"lease_days"`
 	Reference   *string   `json:"reference"`
 	URL         *string   `json:"url"`
 	PurchasedOn *string   `json:"purchased_on"`
@@ -352,6 +354,12 @@ func (req *licenseReq) columns() (map[string]any, error) {
 	}
 	if req.Download != nil {
 		c["downloadable"] = boolInt(*req.Download)
+	}
+	if req.LeaseDays != nil {
+		if *req.LeaseDays < 0 || *req.LeaseDays > 365 {
+			return nil, errors.New("lease_days must be between 0 and 365")
+		}
+		c["lease_days"] = *req.LeaseDays
 	}
 	if req.Rights != nil {
 		var keep []string

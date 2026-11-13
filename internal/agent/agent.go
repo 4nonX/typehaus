@@ -64,6 +64,9 @@ type Installed struct {
 	// PendingRemoval is set when a deactivated font could not be removed yet
 	// (e.g. file locked by a running application).
 	PendingRemoval bool `json:"pending_removal,omitempty"`
+	// LeaseDays > 0: remove the font after this many days without contact to
+	// the server (the license's offline lease).
+	LeaseDays int `json:"lease_days,omitempty"`
 }
 
 // State is the agent's local bookkeeping.
@@ -73,6 +76,9 @@ type State struct {
 	LastSync      time.Time             `json:"last_sync"`
 	LastErr       string                `json:"last_error,omitempty"`
 	Fonts         map[string]*Installed `json:"fonts"`
+	// Paused lists fonts removed because their offline lease ran out; they
+	// are installed again by the next successful sync.
+	Paused []string `json:"paused,omitempty"`
 }
 
 // ConfigDir returns the per-user directory for config and state (or the
@@ -344,13 +350,16 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	}
 	resp, err := a.do(ctx, "GET", "/api/agent/manifest", nil, hdr)
 	if err != nil {
+		if !errors.Is(err, ErrRevoked) && !errors.Is(err, ErrSuspended) {
+			a.expireLeases(st, time.Now())
+		}
 		st.LastErr = err.Error()
 		saveState(st)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
-		st.LastSync, st.LastErr = time.Now(), ""
+		st.LastSync, st.LastErr, st.Paused = time.Now(), "", nil
 		saveState(st)
 		res.Unchanged = true
 		res.PollSeconds = 0
@@ -358,6 +367,7 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	}
 	if resp.StatusCode != 200 {
 		err := fmt.Errorf("manifest: %s", apiError(resp))
+		a.expireLeases(st, time.Now())
 		st.LastErr = err.Error()
 		saveState(st)
 		return nil, err
@@ -433,6 +443,7 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	// install missing or damaged fonts
 	for sha, mf := range want {
 		if inst, ok := st.Fonts[sha]; ok && !inst.PendingRemoval && fileHasHash(inst.Path, sha) {
+			inst.LeaseDays = mf.LeaseDays
 			continue
 		} else if ok {
 			a.sys.uninstall(inst) // clean up damaged/missing entry before reinstalling
@@ -460,7 +471,7 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 	} else {
 		st.ETag = "" // retry failed installs on next pass
 	}
-	st.LastSync, st.LastErr = time.Now(), ""
+	st.LastSync, st.LastErr, st.Paused = time.Now(), "", nil
 	if err := saveState(st); err != nil {
 		return nil, err
 	}
@@ -506,7 +517,7 @@ func (a *Agent) installOne(ctx context.Context, mf protocol.ManifestFont) (*Inst
 	stem := a.sys.filePrefix() + mf.SHA256[:8] + "-" + strings.TrimSuffix(name, filepath.Ext(name))
 	final := filepath.Join(dir, stem+filepath.Ext(name))
 
-	inst := &Installed{SHA256: mf.SHA256, Path: final, FullName: mf.FullName, Family: mf.Family, Style: mf.Style, Kind: mf.Kind}
+	inst := &Installed{SHA256: mf.SHA256, Path: final, FullName: mf.FullName, Family: mf.Family, Style: mf.Style, Kind: mf.Kind, LeaseDays: mf.LeaseDays}
 	cleanup := func() {
 		os.Remove(final)
 		for _, e := range inst.Extras {
@@ -627,6 +638,47 @@ func (a *Agent) RemoveAll() (removed int, failed int, err error) {
 		publishMachineFonts(st)
 	}
 	return removed, failed, saveState(st)
+}
+
+// expireLeases removes fonts whose offline lease ran out: the server has not
+// been reached for longer than their license allows. A clock set back before
+// the last contact counts as expired too. The fonts return with the next
+// successful sync (the cleared ETag forces a full manifest).
+func (a *Agent) expireLeases(st *State, now time.Time) (removed []string) {
+	if st.LastSync.IsZero() {
+		return nil
+	}
+	away := now.Sub(st.LastSync)
+	changed := false
+	for sha, inst := range st.Fonts {
+		if inst.LeaseDays <= 0 {
+			continue
+		}
+		if away <= time.Duration(inst.LeaseDays)*24*time.Hour && away > -24*time.Hour {
+			continue
+		}
+		if err := a.sys.uninstall(inst); err != nil {
+			if !inst.PendingRemoval {
+				a.log.Warn("offline lease ended, but the font could not be removed yet", "font", inst.FullName, "err", err)
+			}
+			inst.PendingRemoval = true
+			continue
+		}
+		delete(st.Fonts, sha)
+		removed = append(removed, inst.FullName)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	a.log.Warn("offline lease ended – fonts removed until the server is reachable again", "fonts", len(removed))
+	st.Paused = append(st.Paused, removed...)
+	st.ETag = ""
+	a.sys.refresh()
+	if machineMode {
+		publishMachineFonts(st)
+	}
+	return removed
 }
 
 // Run syncs in a loop until ctx is cancelled.

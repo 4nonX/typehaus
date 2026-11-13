@@ -54,6 +54,7 @@ type Controller struct {
 	events    []Event
 	listeners []func()
 	syncNow   chan struct{}
+	paused    int // fonts removed by an ended offline lease (loop goroutine only)
 	cancel    context.CancelFunc
 	done      chan struct{}
 }
@@ -285,9 +286,18 @@ func (c *Controller) loop(ctx context.Context, cfg *Config) {
 			if prev != PhaseOffline {
 				c.addEvent("error", "Server unreachable: "+err.Error())
 			}
-			c.update(func(s *Status) { s.Phase, s.Detail = PhaseOffline, err.Error() })
+			detail := err.Error()
+			if st, _ := LoadState(); st != nil && len(st.Paused) > 0 {
+				if n := len(st.Paused); n > c.paused {
+					c.addEvent("removed", fmt.Sprintf("%d font(s) paused: their license allows only limited time offline – they return when the server is reachable", n-c.paused))
+				}
+				c.paused = len(st.Paused)
+				detail = fmt.Sprintf("%d font(s) paused until the server is reachable again (license offline limit). %s", c.paused, err.Error())
+			}
+			c.update(func(s *Status) { s.Phase, s.Detail, s.Fonts = PhaseOffline, detail, c.installedCount() })
 		default:
 			backoff = 0
+			c.paused = 0
 			if res.PollSeconds >= 10 {
 				interval = time.Duration(res.PollSeconds) * time.Second
 			}
