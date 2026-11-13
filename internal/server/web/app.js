@@ -1155,7 +1155,7 @@ function licenseCard(l) {
       ${l.reference ? `<dt>Reference</dt><dd>${esc(l.reference)}</dd>` : ''}
       ${l.url ? `<dt>Terms</dt><dd><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, ''))} ↗</a></dd>` : ''}
       ${l.documents.length ? `<dt>Documents</dt><dd>${l.documents.map((d) => `<a href="${docURL(l, d)}" target="_blank" rel="noopener">${esc(d.filename)}</a>`).join('<br>')}</dd>` : ''}
-      ${l.notes ? `<dt>Notes</dt><dd class="pre">${esc(l.notes)}</dd>` : ''}
+      ${l.notes ? `<dt>Notes</dt><dd>${richText(l.notes)}</dd>` : ''}
     </dl></div>`;
 }
 
@@ -1376,9 +1376,33 @@ function fontEvidence(detail) {
   const val = (k, v) => k === 'License URL' && /^https?:\/\//i.test(v)
     ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)} ↗</a>` : esc(v);
   return `<dl class="kv2">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${val(k, v)}</dd>`).join('')}</dl>
-    ${detail.license_text ? `<pre class="lic">${esc(detail.license_text)}</pre>` : ''}
+    ${detail.license_text ? `<div class="lic">${richText(detail.license_text, 0)}</div>` : ''}
     ${rows.length || detail.license_text ? '' : '<p class="muted">The font file names no foundry and no license.</p>'}`;
 }
+
+// Multi-line text pasted from license terms (EULAs, notes): every line keeps
+// its indentation as a real indent, so wrapped lines stay aligned and nested
+// sections stay readable; blank lines separate paragraphs. Long texts start
+// collapsed (clampAt characters; 0 = never, e.g. inside a scrolling box).
+function richText(text, clampAt = 600) {
+  const lines = String(text).replace(/\r\n?/g, '\n').replace(/\u2028|\u2029/g, '\n').split('\n');
+  let html = '', gap = false;
+  for (const line of lines) {
+    if (!line.trim()) { gap = html !== ''; continue; }
+    const lead = line.match(/^[ \t\u00a0]*/)[0].replace(/\t/g, '    ').length;
+    const level = Math.min(Math.round(lead / 4), 6);
+    html += `<div class="rt-l${level ? ' i' + level : ''}${gap ? ' gap' : ''}">${esc(line.trim())}</div>`;
+    gap = false;
+  }
+  if (!clampAt || text.length <= clampAt) return `<div class="rt">${html}</div>`;
+  return `<div class="rt clamp">${html}</div><button type="button" class="linkbtn rt-more">Show all</button>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.rt-more');
+  if (!b) return;
+  const box = b.previousElementSibling;
+  b.textContent = box.classList.toggle('clamp') ? 'Show all' : 'Show less';
+});
 
 function editLicense(l, done) {
   const rights = l ? l.rights : ['desktop'];
@@ -1413,7 +1437,7 @@ function editLicense(l, done) {
       <label class="field">Order / invoice reference<input type="text" name="reference" maxlength="200" value="${esc(l?.reference)}"></label>
       <label class="field">License terms URL<input type="url" name="url" placeholder="https://" value="${esc(l?.url)}"></label>
     </div>
-    <label class="field">Notes<textarea name="notes" rows="3" placeholder="Restrictions, contact at the foundry, renewal terms…">${esc(l?.notes)}</textarea></label>
+    <label class="field">Notes<textarea name="notes" rows="${l?.notes && l.notes.length > 300 ? 12 : 3}" placeholder="Restrictions, contact at the foundry, renewal terms…">${esc(l?.notes)}</textarea></label>
     ${l ? '' : '<p class="small muted">Attach the EULA, invoice or certificate after saving – open the license from the list.</p>'}`,
   {
     wide: true,

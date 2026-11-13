@@ -221,7 +221,7 @@ label.check input { margin-top: 3px; }
 .doc .spacer { flex: 1; }
 .docup { display: flex; gap: 12px; align-items: center; }
 details.embedded summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
-pre.lic { white-space: pre-wrap; font: 12px/1.5 var(--mono); max-height: 240px; overflow: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+.lic { font-size: 12.5px; line-height: 1.5; max-height: 260px; overflow: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
 .alert.warnbox { border-color: var(--warn); color: var(--ink); background: color-mix(in srgb, var(--warn) 10%, transparent); display: grid; gap: 2px; margin-bottom: 14px; }
 table.lics a.lname { color: var(--ink); font-weight: 600; text-decoration: none; border-bottom: 1px solid var(--rule); }
 table.lics a.lname:hover { border-color: var(--ink); }
@@ -300,3 +300,13 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .ev { margin: 6px 0 0; }
 .perstyle { margin: 8px 0 0; }
 .perstyle summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+
+/* license terms and notes pasted as text (richText) */
+.rt { overflow-wrap: anywhere; }
+.rt-l.gap { margin-top: .7em; }
+.rt-l.i1 { padding-left: 1.25em; } .rt-l.i2 { padding-left: 2.5em; } .rt-l.i3 { padding-left: 3.75em; }
+.rt-l.i4 { padding-left: 5em; } .rt-l.i5 { padding-left: 6.25em; } .rt-l.i6 { padding-left: 7.5em; }
+.rt.clamp { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+.rt-more { margin-top: 4px; }
+.linkbtn { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.linkbtn:hover { color: var(--ink); }
