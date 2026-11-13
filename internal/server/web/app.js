@@ -296,16 +296,22 @@ function accountDialog() {
 // ---------------------------------------------------------------------------
 // font previews
 // ---------------------------------------------------------------------------
-const faceCache = new Map(); // id -> Promise<string|null>
+const faceCache = new Map(); // id -> Promise<string|{failed}>
+// The file's checksum in the address: font ids can be reused after a
+// delete, so a browser must never take a cached file for a new font.
+function fontFileURL(id) {
+  const f = (S.lib.fonts || []).find((x) => x.id === id);
+  return `/api/fonts/${id}/file${f ? `?v=${f.sha256.slice(0, 16)}` : ''}`;
+}
 function loadFace(id) {
   if (!faceCache.has(id)) {
     const fam = `thf${id}`;
-    const ff = new FontFace(fam, `url(/api/fonts/${id}/file)`);
+    const ff = new FontFace(fam, `url(${fontFileURL(id)})`);
     faceCache.set(id, ff.load().then((f) => { document.fonts.add(f); return fam; }).catch(async (err) => {
       // say why: the server's answer, or the browser refusing the file
       let why = 'this browser refused the font file';
       try {
-        const r = await fetch(`/api/fonts/${id}/file`, { cache: 'no-store', headers: { 'X-Typehaus': '1' } });
+        const r = await fetch(fontFileURL(id), { cache: 'no-store', headers: { 'X-Typehaus': '1' } });
         if (!r.ok) why = `the server answered ${r.status}`;
         else if (!/^font\//.test(r.headers.get('Content-Type') || '')) why = 'this format can\'t be shown in a browser';
       } catch (e) { why = 'the file was blocked before it arrived (an extension or network filter?)'; }

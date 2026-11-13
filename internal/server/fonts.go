@@ -211,9 +211,28 @@ func (s *Server) handleFontFile(w http.ResponseWriter, r *http.Request, u *authU
 		s.serveDownload(w, u, []int64{id}) // license rules apply
 		return
 	}
+	fh, err := os.Open(s.blobPath(sha))
+	if err != nil {
+		s.internalErr(w, err) // never cached
+		return
+	}
+	defer fh.Close()
+	st, err := fh.Stat()
+	if err != nil {
+		s.internalErr(w, err)
+		return
+	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
-	http.ServeFile(w, r, s.blobPath(sha))
+	w.Header().Set("ETag", `"`+sha+`"`)
+	// Font ids can be reused after a delete, so the id alone must not be
+	// cached for long: only an address naming the file's checksum is
+	// immutable; otherwise the browser asks again (a cheap 304).
+	if v := r.URL.Query().Get("v"); len(v) >= 12 && strings.HasPrefix(sha, v) {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "private, no-cache")
+	}
+	http.ServeContent(w, r, "", st.ModTime(), fh)
 }
 
 // ---- upload -----------------------------------------------------------------

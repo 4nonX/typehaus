@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Fixed
+- **A font preview could show a different font's cached file, or none.** Browsers kept preview files for a day by the font's number, and the number of a deleted font is reused by the next one added. A browser that had cached the old font kept showing it – or "no preview", if the old one couldn't be previewed. Preview addresses now carry the file's checksum; without it the browser checks back with the server.
+
 ### Changed
 - When a font preview can't be shown, the library now says why – the file was blocked before it arrived (typically a browser extension or network filter), the server answered with an error, or the browser refused the file – instead of always blaming the format. Details go to the browser console, and the next attempt tries again instead of remembering the failure.
 
