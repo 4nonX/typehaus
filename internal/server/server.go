@@ -103,6 +103,8 @@ type Server struct {
 	blobDir string
 	oidc    *oidcProvider
 	limiter *loginLimiter
+	// webhookWake starts a delivery round right away
+	webhookWake chan struct{}
 }
 
 // New opens storage and prepares the server.
@@ -118,7 +120,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	s := &Server{cfg: cfg, db: db, log: log, blobDir: blobDir, limiter: newLoginLimiter()}
+	s := &Server{cfg: cfg, db: db, log: log, blobDir: blobDir, limiter: newLoginLimiter(), webhookWake: make(chan struct{}, 1)}
 	if err := s.bootstrapAdmin(); err != nil {
 		return nil, err
 	}
@@ -143,6 +145,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	}
 	s.recordUsage()
 	go s.janitor(ctx)
+	go s.webhookWorker(ctx)
 	return s, nil
 }
 
@@ -191,6 +194,9 @@ func (s *Server) janitor(ctx context.Context) {
 		s.db.Exec(`DELETE FROM enroll_codes WHERE expires_at < ?`, n)
 		s.recordUsage()
 		s.db.Exec(`DELETE FROM api_idempotency WHERE created_at < ?`, n-24*3600)
+		s.db.Exec(`DELETE FROM webhook_deliveries WHERE status != 'pending' AND created_at < ?`, n-30*86400)
+		s.db.Exec(`DELETE FROM webhook_once WHERE created_at < ?`, n-400*86400)
+		s.scheduledEvents()
 		// devices that stopped reporting (scan switched off, agent gone)
 		s.db.Exec(`DELETE FROM device_inventory WHERE device_id IN (SELECT id FROM devices WHERE inventory_at < ?)`, n-30*86400)
 		tmp := filepath.Join(s.cfg.DataDir, "tmp")
@@ -308,6 +314,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/tokens/{id}", s.noTokens(s.admin(s.handleDeleteToken)))
 	mux.Handle("PATCH /api/tokens/{id}", s.noTokens(s.admin(s.handleUpdateToken)))
 	mux.Handle("POST /api/tokens/{id}/rotate", s.noTokens(s.admin(s.handleRotateToken)))
+	mux.Handle("GET /api/webhooks", s.admin(s.handleListWebhooks))
+	mux.Handle("POST /api/webhooks", s.admin(s.handleCreateWebhook))
+	mux.Handle("PATCH /api/webhooks/{id}", s.admin(s.handleUpdateWebhook))
+	mux.Handle("DELETE /api/webhooks/{id}", s.admin(s.handleDeleteWebhook))
+	mux.Handle("POST /api/webhooks/{id}/secret", s.admin(s.handleRotateWebhookSecret))
+	mux.Handle("POST /api/webhooks/{id}/test", s.admin(s.handleTestWebhook))
+	mux.Handle("GET /api/webhooks/{id}/deliveries", s.admin(s.handleListDeliveries))
+	mux.Handle("POST /api/webhooks/{id}/deliveries/{delivery}/redeliver", s.admin(s.handleRedeliver))
+	mux.Handle("GET /api/webhook-events", s.admin(s.handleWebhookEvents))
 	s.registerV1(mux)
 
 	// agent binaries (public: open-source, needed before a device can authenticate)

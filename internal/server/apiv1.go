@@ -173,6 +173,21 @@ func (s *Server) v1Routes() []apiRoute {
 		{Method: "GET", Paged: true, PageField: "findings", Path: "/inventory", Admin: true, H: s.handleInventory, Tag: "Compliance", Summary: "Copies of library fonts found outside typehaus", Resp: inventoryResult{}},
 		{Method: "GET", Path: "/inventory.csv", Admin: true, H: s.handleInventoryCSV, Tag: "Compliance", Summary: "Copies found outside typehaus (CSV)", Produces: "text/csv"},
 		{Method: "GET", Paged: true, Path: "/reports/usage", Admin: true, H: s.handleUsageReport, Tag: "Compliance", Summary: "Usage by family", Resp: []usageRow{}},
+		// webhooks
+		{Method: "GET", Path: "/webhook-events", Admin: true, H: s.handleWebhookEvents, Tag: "Webhooks", Summary: "Event types webhooks can subscribe to", Resp: []webhookEventInfo{}},
+		{Paged: true, Method: "GET", Path: "/webhooks", Admin: true, H: s.handleListWebhooks, Tag: "Webhooks", Summary: "List webhooks", Resp: []webhookRow{}},
+		{Method: "POST", Path: "/webhooks", Admin: true, H: s.handleCreateWebhook, Tag: "Webhooks", Summary: "Create a webhook",
+			Description: "events: event types, a family like \"license.*\", or [\"*\"] for all (default). The response holds the signing secret – it is shown only here.",
+			Body:        webhookReq{}, Resp: webhookCreated{}, Status: 201},
+		{Method: "GET", Path: "/webhooks/{id}", Admin: true, H: s.handleGetWebhook, Tag: "Webhooks", Summary: "Get a webhook", Resp: webhookRow{}},
+		{Method: "PATCH", Path: "/webhooks/{id}", Admin: true, H: s.handleUpdateWebhook, Tag: "Webhooks", Summary: "Change a webhook", Body: webhookReq{}},
+		{Method: "DELETE", Path: "/webhooks/{id}", Admin: true, H: s.handleDeleteWebhook, Tag: "Webhooks", Summary: "Delete a webhook"},
+		{Method: "POST", Path: "/webhooks/{id}/secret", Admin: true, H: s.handleRotateWebhookSecret, Tag: "Webhooks", Summary: "New signing secret",
+			Description: "The old secret stops working at once.", Resp: webhookCreated{}},
+		{Method: "POST", Path: "/webhooks/{id}/test", Admin: true, H: s.handleTestWebhook, Tag: "Webhooks", Summary: "Send a webhook.test event", Resp: apiCreated{}, Status: 202},
+		{Paged: true, Method: "GET", Path: "/webhooks/{id}/deliveries", Admin: true, H: s.handleListDeliveries, Tag: "Webhooks", Summary: "Deliveries, newest first (30 days)", Resp: []webhookDelivery{}},
+		{Method: "POST", Path: "/webhooks/{id}/deliveries/{delivery}/redeliver", Admin: true, H: s.handleRedeliver, Tag: "Webhooks", Summary: "Send a delivery again", Status: 202},
+
 		{Method: "GET", Path: "/audit", Admin: true, H: s.handleAudit, Tag: "Compliance", Summary: "Activity log",
 			Query: []apiParam{{"limit", "integer", "max. entries, default 200, at most 1000"}, {"before", "integer", "entries older than this id (paging)"}},
 			Resp:  []auditEntry{}},
@@ -981,6 +996,25 @@ func (s *Server) openAPI() map[string]any {
 		e["properties"].(map[string]any)["code"] = map[string]any{"type": "string", "enum": codes,
 			"description": "Stable, machine-readable. New codes may be added; treat unknown ones by their HTTP status.\n\n" + strings.Join(desc, "\n\n")}
 	}
+	// events: OpenAPI 3.1 webhooks
+	hooks := map[string]any{}
+	evSchema := gen.schema(reflect.TypeOf(webhookEvent{}))
+	for _, t := range sortedEventTypes() {
+		hooks[t] = map[string]any{"post": map[string]any{
+			"summary":     t,
+			"description": webhookEvents[t] + " " + webhookDataDocs[t],
+			"parameters": []any{
+				map[string]any{"name": "X-Typehaus-Event", "in": "header", "required": true, "schema": map[string]any{"type": "string", "const": t}},
+				map[string]any{"name": "X-Typehaus-Delivery", "in": "header", "required": true, "description": "delivery id – the same on retries", "schema": map[string]any{"type": "string"}},
+				map[string]any{"name": "X-Typehaus-Timestamp", "in": "header", "required": true, "description": "unix seconds", "schema": map[string]any{"type": "string"}},
+				map[string]any{"name": "X-Typehaus-Signature", "in": "header", "required": true,
+					"description": "v1=<hex HMAC-SHA256 of \"<timestamp>.<raw body>\" with the webhook's secret>. Reject deliveries with a wrong signature or a timestamp older than 5 minutes.",
+					"schema":      map[string]any{"type": "string"}},
+			},
+			"requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": evSchema}}},
+			"responses":   map[string]any{"2XX": map[string]any{"description": "Delivered. Any other answer (or none within 10 s) is retried for about 22 hours."}},
+		}}
+	}
 	serverURL := s.cfg.BaseURL
 	if serverURL == "" {
 		serverURL = "/" // relative to wherever the description was loaded from
@@ -998,6 +1032,7 @@ func (s *Server) openAPI() map[string]any {
 		"security":   []any{map[string]any{"token": []string{}}},
 		"tags":       tagList,
 		"paths":      paths,
+		"webhooks":   hooks,
 		"components": map[string]any{"schemas": schemas, "securitySchemes": map[string]any{"token": map[string]any{"type": "http", "scheme": "bearer"}}},
 	}
 }
@@ -1017,6 +1052,8 @@ var typeNames = map[string]string{
 	"inventoryCopy": "InventoryCopy", "usageRow": "FamilyUsage", "auditEntry": "ActivityEntry", "apiErrorBody": "Error", "apiOK": "OK",
 	"apiCreated": "Created", "apiFontIDs": "FontIDs", "apiAssignLicense": "AssignLicense", "apiUploadResponse": "UploadResponse",
 	"apiDocsAdded": "DocumentsAdded", "apiDocReplaced": "DocumentReplaced", "apiDocUpdate": "DocumentChange", "apiRequestAnswer": "RequestAnswer",
+	"webhookRow": "Webhook", "webhookReq": "WebhookChange", "webhookCreated": "WebhookSecret", "webhookDelivery": "WebhookDelivery",
+	"webhookEventInfo": "WebhookEventType", "webhookEvent": "WebhookEvent",
 }
 
 func (g *schemaGen) schema(t reflect.Type) map[string]any {

@@ -375,6 +375,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request, u *authUse
 			s.db.Exec(`INSERT OR IGNORE INTO collection_fonts (collection_id, font_id) VALUES (?, ?)`, collection, id)
 		}
 	}
+	if len(added) > 0 {
+		s.emit("font.added", map[string]any{"fonts": s.eventFonts(added), "by": u.Username})
+	}
 	writeJSON(w, 200, map[string]any{"results": results, "font_ids": added})
 }
 
@@ -797,6 +800,7 @@ func (s *Server) handleBulkUpdateFonts(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 	s.audit(u, "font.license", "%d fonts → license %v", len(req.FontIDs), lic)
+	s.emit("font.license_changed", map[string]any{"fonts": s.eventFonts(req.FontIDs), "license_id": lic, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -811,12 +815,16 @@ func (s *Server) handleDeleteFonts(w http.ResponseWriter, r *http.Request, u *au
 		writeErr(w, 400, "font_ids required")
 		return
 	}
+	gone := s.eventFonts(req.FontIDs) // before they are gone
 	names, err := s.deleteFonts(req.FontIDs)
 	if err != nil {
 		s.internalErr(w, err)
 		return
 	}
 	s.audit(u, "font.delete", "%s", strings.Join(names, ", "))
+	if len(gone) > 0 {
+		s.emit("font.deleted", map[string]any{"fonts": gone, "by": u.Username})
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

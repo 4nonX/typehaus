@@ -492,6 +492,7 @@ func (s *Server) handleCreateLicense(w http.ResponseWriter, r *http.Request, u *
 	}
 	id, _ := res.LastInsertId()
 	s.audit(u, "license.create", "%s", cols["name"])
+	s.emit("license.created", map[string]any{"license": s.eventLicense(id), "by": u.Username})
 	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
@@ -541,6 +542,7 @@ func (s *Server) handleUpdateLicense(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	s.audit(u, "license.update", "license %d: %s", id, strings.Join(sortedKeys(cols), ", "))
+	s.emit("license.updated", map[string]any{"license": s.eventLicense(id), "changed": sortedKeys(cols), "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -578,6 +580,7 @@ func (s *Server) handleDeleteLicense(w http.ResponseWriter, r *http.Request, u *
 		s.removeBlobIfUnused(sha)
 	}
 	s.audit(u, "license.delete", "%s", name)
+	s.emit("license.deleted", map[string]any{"license": map[string]any{"id": id, "name": name}, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

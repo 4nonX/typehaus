@@ -112,6 +112,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *aut
 		s.setUserGroups(id, *req.GroupIDs)
 	}
 	s.audit(u, "user.create", "%s", str(req.Username))
+	s.emit("user.created", map[string]any{"user": s.eventUser(id), "by": u.Username})
 	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
@@ -218,6 +219,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *aut
 	s.pruneActivations()
 	s.audit(u, "user.update", "user %d", id)
 	s.usageChanged()
+	s.emit("user.updated", map[string]any{"user": s.eventUser(id), "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -239,6 +241,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request, u *aut
 	s.db.QueryRow(`SELECT username FROM users WHERE id = ?`, id).Scan(&name)
 	s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	s.audit(u, "user.delete", "%s", name)
+	s.emit("user.deleted", map[string]any{"user": map[string]any{"id": id, "username": name}, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

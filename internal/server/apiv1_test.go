@@ -7,10 +7,12 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // apiCall sends a request with an API token (no session, no X-Typehaus).
@@ -154,6 +156,12 @@ func TestAPIv1Contract(t *testing.T) {
 	admin.do("POST", "/api/requests", map[string]any{"font": "Futura", "purpose": "Brochure"}, nil)
 	admin.do("POST", "/api/activations", map[string]any{"font_ids": []int64{fonts[0].ID}}, nil)
 	enrollDevice(t, ts, admin)
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer sink.Close()
+	var hook webhookCreated
+	admin.do("POST", "/api/webhooks", map[string]any{"name": "Sink", "url": sink.URL}, &hook)
+	admin.do("POST", "/api/webhooks/"+itoa(hook.ID)+"/test", nil, nil)
+	waitDelivered(t, admin, hook.ID)
 	tok := newToken(t, admin, "Contract", "read")
 
 	st, b, _ := apiCall(t, ts.URL, "", "GET", "/api/v1/openapi.json", nil)
@@ -189,6 +197,8 @@ func TestAPIv1Contract(t *testing.T) {
 		switch {
 		case strings.HasPrefix(path, "/licenses/{id}"):
 			path = strings.Replace(path, "{id}", itoa(lic["id"]), 1)
+		case strings.HasPrefix(path, "/webhooks/{id}"):
+			path = strings.Replace(path, "{id}", itoa(hook.ID), 1)
 		default:
 			path = strings.Replace(path, "{id}", ids["{id}"], 1)
 		}
@@ -216,7 +226,7 @@ func TestAPIv1Contract(t *testing.T) {
 	re := regexp.MustCompile(`\{[a-z]+\}`)
 	for p := range paths {
 		for _, m := range re.FindAllString(p, -1) {
-			if m != "{id}" && m != "{doc}" {
+			if m != "{id}" && m != "{doc}" && m != "{delivery}" {
 				t.Errorf("unexpected path parameter %s in %s", m, p)
 			}
 		}
@@ -323,7 +333,7 @@ func TestAPIv1NotFound(t *testing.T) {
 		if !strings.Contains(rt.Path, "{") {
 			continue
 		}
-		path := strings.ReplaceAll(rt.Path, "{id}", "999999")
+		path := strings.ReplaceAll(strings.ReplaceAll(rt.Path, "{id}", "999999"), "{delivery}", "999999")
 		if strings.Contains(rt.Path, "{doc}") { // unknown document of an existing license
 			path = strings.Replace(strings.ReplaceAll(rt.Path, "{doc}", "999999"), "{id}", itoa(lic["id"]), 1)
 		}
@@ -609,4 +619,23 @@ func TestAPIv1Idempotency(t *testing.T) {
 	if st, rep := up(); st != 200 || rep != "true" {
 		t.Fatalf("upload retry: %d %q", st, rep)
 	}
+}
+
+// waitDelivered waits until a webhook has no pending deliveries.
+func waitDelivered(t *testing.T, admin *client, id int64) []webhookDelivery {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		var ds []webhookDelivery
+		admin.do("GET", "/api/webhooks/"+itoa(id)+"/deliveries", nil, &ds)
+		pending := false
+		for _, d := range ds {
+			pending = pending || d.Status == "pending"
+		}
+		if len(ds) > 0 && !pending {
+			return ds
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("webhook deliveries still pending")
+	return nil
 }

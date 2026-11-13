@@ -311,6 +311,37 @@ CREATE TABLE api_idempotency (
 	PRIMARY KEY (principal, key)
 );
 `,
+	// 22: webhooks and their deliveries; webhook_once remembers scheduled
+	// events already sent (license.expiring at 30/14/7/1 days, …)
+	`
+CREATE TABLE webhooks (
+	id         INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL,
+	url        TEXT NOT NULL,
+	secret     TEXT NOT NULL,
+	events     TEXT NOT NULL DEFAULT '*',
+	active     INTEGER NOT NULL DEFAULT 1,
+	created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE TABLE webhook_deliveries (
+	id           INTEGER PRIMARY KEY,
+	webhook_id   INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+	event        TEXT NOT NULL,
+	event_id     TEXT NOT NULL,
+	payload      TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'pending',
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	next_at      INTEGER NOT NULL,
+	last_code    INTEGER,
+	last_error   TEXT NOT NULL DEFAULT '',
+	created_at   INTEGER NOT NULL,
+	delivered_at INTEGER
+);
+CREATE INDEX webhook_deliveries_due ON webhook_deliveries(status, next_at);
+CREATE INDEX webhook_deliveries_hook ON webhook_deliveries(webhook_id, id);
+CREATE TABLE webhook_once (key TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

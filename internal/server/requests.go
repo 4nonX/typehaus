@@ -89,6 +89,7 @@ func (s *Server) handleCreateRequest(w http.ResponseWriter, r *http.Request, u *
 	}
 	id, _ := res.LastInsertId()
 	s.audit(u, "request.create", "%s", font)
+	s.emit("request.created", map[string]any{"request": s.eventRequest(id)})
 	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
@@ -143,6 +144,9 @@ func (s *Server) handleUpdateRequest(w http.ResponseWriter, r *http.Request, u *
 				st, answer, now(), u.ID, boolInt(owner == u.ID), id)
 		}
 		s.audit(u, "request."+st, "%s", font)
+		if st != "open" {
+			s.emit("request.answered", map[string]any{"request": s.eventRequest(id)})
+		}
 	} else {
 		s.db.Exec(`UPDATE font_requests SET answer = ? WHERE id = ?`, answer, id)
 	}
@@ -169,4 +173,21 @@ func (s *Server) handleDeleteRequest(w http.ResponseWriter, r *http.Request, u *
 	s.db.Exec(`DELETE FROM font_requests WHERE id = ?`, id)
 	s.audit(u, "request.delete", "%s", font)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// eventRequest is a request as GET /requests shows it.
+func (s *Server) eventRequest(id int64) *fontRequest {
+	var x fontRequest
+	var res sql.NullInt64
+	err := s.db.QueryRow(`SELECT fr.id, fr.user_id, COALESCE(NULLIF(u.display_name, ''), u.username), fr.font, fr.purpose, fr.status, fr.answer, fr.seen,
+		fr.created_at, fr.resolved_at, COALESCE(NULLIF(rb.display_name, ''), rb.username, '')
+		FROM font_requests fr JOIN users u ON u.id = fr.user_id LEFT JOIN users rb ON rb.id = fr.resolved_by WHERE fr.id = ?`, id).
+		Scan(&x.ID, &x.UserID, &x.User, &x.Font, &x.Purpose, &x.Status, &x.Answer, &x.Seen, &x.CreatedAt, &res, &x.ResolvedBy)
+	if err != nil {
+		return nil
+	}
+	if res.Valid {
+		x.ResolvedAt = &res.Int64
+	}
+	return &x
 }

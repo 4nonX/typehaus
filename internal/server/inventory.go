@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"mime"
 	"net/http"
 	"sort"
@@ -69,6 +70,7 @@ func (s *Server) handleAgentInventory(w http.ResponseWriter, r *http.Request, d 
 		s.internalErr(w, err)
 		return
 	}
+	s.emitNewCopies(d.ID)
 	writeJSON(w, 200, map[string]int{"fonts": len(rep.Fonts)})
 }
 
@@ -230,4 +232,35 @@ func (s *Server) outsideCopies() map[int64]int {
 		}
 	}
 	return out
+}
+
+// emitNewCopies sends inventory.copy_found for copies of licensed fonts on
+// this device that weren't reported before (each copy once).
+func (s *Server) emitNewCopies(deviceID int64) {
+	var hooks int
+	s.db.QueryRow(`SELECT COUNT(*) FROM webhooks WHERE active = 1`).Scan(&hooks)
+	if hooks == 0 {
+		return
+	}
+	inv, err := s.inventory()
+	if err != nil {
+		return
+	}
+	type found struct {
+		Family    string        `json:"family"`
+		LicenseID *int64        `json:"license_id"`
+		License   string        `json:"license"`
+		Copy      inventoryCopy `json:"copy"`
+	}
+	var fresh []found
+	for _, f := range inv.Findings {
+		for _, c := range f.Copies {
+			if c.DeviceID == deviceID && s.once(fmt.Sprintf("inventory:%d:%s:%s", deviceID, c.Path, f.Family)) {
+				fresh = append(fresh, found{f.Family, f.LicenseID, f.License, c})
+			}
+		}
+	}
+	if len(fresh) > 0 {
+		s.emit("inventory.copy_found", map[string]any{"device": s.eventDevice(deviceID), "copies": fresh})
+	}
 }

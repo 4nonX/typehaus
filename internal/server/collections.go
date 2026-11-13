@@ -105,6 +105,7 @@ func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request, 
 		s.setCollectionGroups(id, *req.GroupIDs)
 	}
 	s.audit(u, "collection.create", "%s", *req.Name)
+	s.emit("collection.created", map[string]any{"collection": s.eventCollection(id), "by": u.Username})
 	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
@@ -175,6 +176,7 @@ func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request, 
 	s.pruneActivations()
 	s.audit(u, "collection.update", "collection %d", id)
 	s.usageChanged()
+	s.emit("collection.updated", map[string]any{"collection": s.eventCollection(id), "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -194,6 +196,7 @@ func (s *Server) handleDeleteCollection(w http.ResponseWriter, r *http.Request, 
 	s.pruneActivations()
 	s.audit(u, "collection.delete", "%s", name)
 	s.usageChanged()
+	s.emit("collection.deleted", map[string]any{"collection": map[string]any{"id": id, "name": name}, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -225,6 +228,7 @@ func (s *Server) handleCollectionAddFonts(w http.ResponseWriter, r *http.Request
 	}
 	s.audit(u, "collection.add", "%d font(s) → collection %d", len(req.FontIDs), id)
 	s.usageChanged()
+	s.emit("collection.updated", map[string]any{"collection": s.eventCollection(id), "added_fonts": s.eventFonts(req.FontIDs), "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -251,6 +255,7 @@ func (s *Server) handleCollectionRemoveFonts(w http.ResponseWriter, r *http.Requ
 	s.pruneActivations()
 	s.audit(u, "collection.remove", "%d font(s) ← collection %d", len(req.FontIDs), id)
 	s.usageChanged()
+	s.emit("collection.updated", map[string]any{"collection": s.eventCollection(id), "removed_fonts": s.eventFonts(req.FontIDs), "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

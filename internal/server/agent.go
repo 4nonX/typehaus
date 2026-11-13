@@ -68,6 +68,7 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request, u *a
 		writeErr(w, 400, "bad id")
 		return
 	}
+	dev := s.eventDevice(id) // before it is gone
 	var res sql.Result
 	var err error
 	if u.IsAdmin {
@@ -84,6 +85,7 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request, u *a
 		return
 	}
 	s.audit(u, "device.revoke", "device %d", id)
+	s.emit("device.removed", map[string]any{"device": dev, "by": u.Username})
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -154,6 +156,7 @@ func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := res.LastInsertId()
 	s.audit(&authUser{ID: userID, Username: username, IP: s.clientIP(r)}, "device.enroll", "%s (%s, %s)", name, req.Platform, req.Hostname)
+	s.emit("device.enrolled", map[string]any{"device": s.eventDevice(id)})
 	writeJSON(w, 201, protocol.EnrollResponse{DeviceID: id, Token: tok, User: username})
 }
 
