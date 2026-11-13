@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/4nonX/typehaus/internal/fontmeta"
@@ -232,4 +233,110 @@ func (a *Agent) MaybeInventory(ctx context.Context) {
 	} else {
 		a.log.Info("inventory sent", "fonts", n)
 	}
+}
+
+// ---- fonts installed on this computer ------------------------------------------
+
+// systemFontDirs: where the operating system and applications find fonts,
+// including the system's own (which the inventory leaves out).
+func systemFontDirs() []string {
+	var out []string
+	for _, d := range inventoryDirs() {
+		out = append(out, d.path)
+	}
+	home, _ := os.UserHomeDir()
+	switch runtime.GOOS {
+	case "darwin":
+		out = append(out, "/System/Library/Fonts", "/Network/Library/Fonts", "/Library/Application Support/Adobe/Fonts")
+		if home != "" {
+			// Adobe Fonts activated through Creative Cloud
+			out = append(out, filepath.Join(home, "Library", "Application Support", "Adobe", "CoreSync", "plugins", "livetype"))
+		}
+	case "windows":
+		if cf := os.Getenv("CommonProgramFiles"); cf != "" {
+			out = append(out, filepath.Join(cf, "Adobe", "Fonts"))
+		}
+		if ad := os.Getenv("APPDATA"); ad != "" {
+			out = append(out, filepath.Join(ad, "Adobe", "CoreSync", "plugins", "livetype"))
+		}
+	}
+	if st, err := LoadState(); err == nil {
+		seen := map[string]bool{}
+		for _, f := range st.Fonts {
+			if d := filepath.Dir(f.Path); !seen[d] {
+				seen[d] = true
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
+var systemFonts struct {
+	sync.Mutex
+	names map[string]bool
+	at    time.Time
+	dirs  string // the folders the names came from
+}
+
+// SystemFontNames returns the PostScript names (lower case) of every font
+// installed on this computer, by typehaus or otherwise. The scan is cached
+// on disk per file and in memory for a minute.
+func SystemFontNames(ctx context.Context) map[string]bool {
+	systemFonts.Lock()
+	defer systemFonts.Unlock()
+	dirs := systemFontDirs()
+	key := strings.Join(dirs, "\x00")
+	if systemFonts.names != nil && systemFonts.dirs == key && time.Since(systemFonts.at) < time.Minute {
+		return systemFonts.names
+	}
+	d, _ := ConfigDir()
+	cachePath := filepath.Join(d, "system-fonts-cache.json")
+	cache := map[string]inventoryCacheEntry{}
+	if b, err := os.ReadFile(cachePath); err == nil {
+		json.Unmarshal(b, &cache)
+	}
+	next := map[string]inventoryCacheEntry{}
+	names := map[string]bool{}
+	for _, dir := range dirs {
+		filepath.WalkDir(dir, func(p string, de fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil || de.IsDir() || !de.Type().IsRegular() {
+				return nil
+			}
+			p = filepath.Clean(p)
+			if _, done := next[p]; done || fontmeta.CompanionExts[strings.ToLower(filepath.Ext(p))] {
+				return nil
+			}
+			info, err := de.Info()
+			if err != nil || info.Size() < 4 || info.Size() > inventoryMaxFile {
+				return nil
+			}
+			e, ok := cache[p]
+			if !ok || e.Size != info.Size() || e.MTime != info.ModTime().UnixNano() {
+				e = inventoryCacheEntry{Size: info.Size(), MTime: info.ModTime().UnixNano(), Fonts: scanFontFile(p)}
+			}
+			next[p] = e
+			for _, f := range e.Fonts {
+				if f.PostScript != "" {
+					names[strings.ToLower(f.PostScript)] = true
+				}
+			}
+			return nil
+		})
+	}
+	if d != "" {
+		writeJSONFile(cachePath, next, 0o600)
+	}
+	systemFonts.names, systemFonts.at, systemFonts.dirs = names, time.Now(), key
+	return names
+}
+
+// forgetSystemFonts makes the next lookup scan again (after an install).
+func forgetSystemFonts() {
+	systemFonts.Lock()
+	systemFonts.names = nil
+	systemFonts.Unlock()
 }

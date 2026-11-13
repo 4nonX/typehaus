@@ -1,0 +1,28 @@
+/* typehaus panel – plain CSS that UXP and CEP both render. Colours follow
+   the host theme where the host provides variables, with neutral fallbacks. */
+* { box-sizing: border-box; }
+body { margin: 0; padding: 10px 12px; font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 12px; line-height: 1.4;
+  color: var(--uxp-host-text-color, #d8d8d8); background: var(--uxp-host-background-color, #323232); }
+#typehaus { display: flex; flex-direction: column; }
+.th-brand { display: flex; align-items: center; margin-bottom: 8px; font-weight: 600; font-size: 13px; }
+.th-brand i { display: inline-block; width: 6px; height: 6px; background: #e5482d; margin-left: 2px; }
+.th-doc { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; min-width: 0; }
+.th-doc b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; min-width: 0; }
+.th-doc .th-muted { flex-shrink: 0; }
+.th-muted { color: var(--uxp-host-text-color-secondary, #9a9a9a); }
+.th-ok { color: #6fbf73; margin: 6px 0; }
+.th-box { border: 1px solid #555; border-radius: 4px; padding: 8px 10px; margin: 4px 0; }
+.th-box p { margin: 4px 0 0; }
+.th-warn { border-color: #c98510; }
+.th-font { display: flex; align-items: center; padding: 7px 0; border-top: 1px solid #4a4a4a; }
+.th-grow { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.th-ps { font-family: Menlo, Consolas, monospace; font-size: 10px; color: var(--uxp-host-text-color-secondary, #9a9a9a); }
+.th-tag { font-size: 11px; margin-top: 2px; }
+.th-available, .th-active { color: #6fbf73; }
+.th-refused, .th-not_available, .th-unsupported { color: #d9a441; }
+.th-btn { flex-shrink: 0; margin-left: 8px; padding: 3px 10px; border-radius: 12px; border: 1px solid #777; background: transparent; color: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.th-btn:hover { border-color: #aaa; }
+.th-primary { margin: 0 0 8px; align-self: flex-start; background: #e5482d; border-color: #e5482d; color: #fff; padding: 5px 14px; }
+.th-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; }
+.th-msg { color: var(--uxp-host-text-color, #d8d8d8); }
+.th-link { background: none; border: 0; color: var(--uxp-host-link-text-color, #8ab4f8); cursor: pointer; font-size: 11px; padding: 0; }

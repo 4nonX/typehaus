@@ -1,12 +1,17 @@
 package server
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/4nonX/typehaus/internal/adobeplugins"
 )
 
 // Agent programs (typehaus-agent…) and the installers: typehaus-setup-windows.exe,
@@ -77,8 +82,66 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// ---- plugins for design apps ------------------------------------------------
+
+// pluginDownload: an Adobe plugin package. The UXP packages (.ccx) are built
+// from the plugin sources in this server; the Illustrator extension (.zxp)
+// has to be signed, which the release build does – it is offered when
+// present in the agents folder.
+type pluginDownload struct {
+	ID        string `json:"id"`
+	App       string `json:"app"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	Format    string `json:"format"`
+	Size      int64  `json:"size"`
+	Available bool   `json:"available"`
+}
+
+var ccxCache sync.Map // file name → []byte
+
+func (s *Server) pluginPackage(p *adobeplugins.Plugin) ([]byte, bool) {
+	if p.Format == "ccx" {
+		if b, ok := ccxCache.Load(p.File); ok {
+			return b.([]byte), true
+		}
+		b, err := adobeplugins.CCX(p.ID, Version)
+		if err != nil {
+			return nil, false
+		}
+		ccxCache.Store(p.File, b)
+		return b, true
+	}
+	b, err := os.ReadFile(filepath.Join(s.cfg.AgentsDir, p.File))
+	return b, err == nil
+}
+
+func (s *Server) handleListPluginDownloads(w http.ResponseWriter, r *http.Request) {
+	out := []pluginDownload{}
+	for i := range adobeplugins.Plugins {
+		p := &adobeplugins.Plugins[i]
+		d := pluginDownload{ID: p.ID, App: p.App, Name: p.File, URL: "/downloads/" + p.File, Format: p.Format}
+		if b, ok := s.pluginPackage(p); ok {
+			d.Available, d.Size = true, int64(len(b))
+		}
+		out = append(out, d)
+	}
+	writeJSON(w, 200, out)
+}
+
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if p := adobeplugins.ByFile(name); p != nil {
+		b, ok := s.pluginPackage(p)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(b))
+		return
+	}
 	if !downloadName.MatchString(name) {
 		http.NotFound(w, r)
 		return

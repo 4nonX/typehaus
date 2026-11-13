@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div class="th-brand">typehaus<i></i></div>
+  <div id="typehaus"></div>
+  <script src="typehaus.js"></script>
+  <script src="host.js"></script>
+  <script>
+    TypehausPanel.mount(document.getElementById('typehaus'), TypehausIllustrator, TypehausPanel.createClient({ fetch: TypehausIllustrator.fetch }));
+  </script>
+</body>
+</html>

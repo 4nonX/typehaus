@@ -111,3 +111,5 @@ select { font: inherit; font-size: 14px; color: var(--ink); background: var(--ca
 .tag { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); }
 .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .tag.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 55%, transparent); }
+
+.set .sub.err { color: var(--danger); }

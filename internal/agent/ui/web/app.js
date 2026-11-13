@@ -110,6 +110,8 @@ function render() {
 
     ${affinitySection()}
 
+    ${adobeSection()}
+
     <h2><span>Recent activity</span></h2>
     <div>${S.events.length ? S.events.slice(0, 12).map((e) => `
       <div class="ev ${esc(e.kind)}"><i></i><span>${e.kind === 'added' ? 'Installed ' : e.kind === 'removed' ? 'Removed ' : ''}${esc(e.text)}</span><time>${clock(e.time)}</time></div>`).join('')
@@ -130,7 +132,28 @@ function render() {
   };
   $('#disc').onclick = confirmDisconnect;
   wireAffinity();
+  wireAdobe();
   loadPreviews();
+}
+
+// ---- Adobe apps ----------------------------------------------------------------
+const adobeMsg = {}; // id → [ok, text], kept across redraws
+function adobeSection() {
+  const list = S.adobe || [];
+  if (!list.length) return '';
+  return `<h2><span>Adobe apps</span></h2>
+    <p class="sub" style="color:var(--ink-3);font-size:13px;margin:0 0 4px">The typehaus panel shows the fonts a document is missing and switches them on – inside the app.</p>
+    ${list.map((p) => `<div class="set"><div class="grow">${esc(p.app)}${adobeMsg[p.id] ? `<div class="sub ${adobeMsg[p.id][0] ? '' : 'err'}">${esc(adobeMsg[p.id][1])}</div>` : ''}</div>
+      <button class="btn sm" data-adobe="${esc(p.id)}">Install panel</button></div>`).join('')}`;
+}
+function wireAdobe() {
+  document.querySelectorAll('[data-adobe]').forEach((b) => b.onclick = async () => {
+    const id = b.dataset.adobe;
+    b.disabled = true; b.textContent = 'Installing…';
+    try { const r = await api('POST', '/api/adobe/install', { id }); adobeMsg[id] = [true, r.message]; }
+    catch (e) { adobeMsg[id] = [false, e.message]; }
+    lastKey = ''; refresh();
+  });
 }
 
 // ---- Affinity ----------------------------------------------------------------

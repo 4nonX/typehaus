@@ -1002,10 +1002,12 @@ function platformLabel(p) {
 // ---------------------------------------------------------------------------
 async function renderDevices(page) {
   const showAll = S.me.is_admin && new URLSearchParams(location.hash.split('?')[1] || '').get('all') === '1';
-  const [devices, downloads] = await Promise.all([
+  const [devices, downloads, plugins] = await Promise.all([
     api('GET', '/api/devices' + (showAll ? '?all=1' : '')),
     api('GET', '/api/downloads').catch(() => []),
+    api('GET', '/api/downloads/plugins').catch(() => []),
   ]);
+  const PLUGIN_NEEDS = { indesign: 'InDesign 2023 (18.5) or later', photoshop: 'Photoshop 2023 (24.2) or later', illustrator: 'Illustrator 2020 or later' };
   page.innerHTML = `
     <h1>Devices</h1>
     <p class="sub">The typehaus agent keeps the fonts you activate installed on your computers – for your user account only, no administrator rights needed.</p>
@@ -1027,6 +1029,15 @@ async function renderDevices(page) {
         <p class="small" style="color:var(--ink-2)">The <span class="tmark">t<i></i></span> icon shows the sync status: a solid square means up to date, an outlined square that the server can't be reached (fonts stay active), and an amber diamond that something needs attention.</p>
         <p class="small muted">Windows: per-user font registration (Windows 10 1809+). macOS: ~/Library/Fonts. Linux: ~/.local/share/fonts via fontconfig.</p>
       </div>
+    </div>
+    <div class="card dplugins">
+      <h2 style="margin-top:0">Plugins for design apps</h2>
+      <p class="small" style="color:var(--ink-2)">See which fonts a document is missing and switch them on without leaving the app. The plugins work through the typehaus app on the same computer – install and connect it first.</p>
+      <div class="plist">${plugins.map((p) => `<div class="pitem"><b>${esc(p.app)}</b><span class="small muted">${PLUGIN_NEEDS[p.id] || ''}</span>
+        ${p.available ? `<a class="btn sm" href="${esc(p.url)}" download>Download .${esc(p.format)}</a>` : '<span class="small muted">in the release builds</span>'}</div>`).join('')}
+        <div class="pitem"><b>Affinity</b><span class="small muted">3.3 or later</span><span class="small">No plugin needed</span></div></div>
+      <p class="small muted">Install: open the typehaus app's window and choose <b>Install</b> next to the app – or double-click the downloaded file and Creative Cloud installs it
+        (it may point out that the plugin isn't from the Adobe Marketplace). Affinity: turn on <b>Settings → Model Context Protocol → Enable MCP server</b> and restart Affinity; typehaus connects by itself.</p>
     </div>
     <div class="row" style="margin-top:28px"><h2 style="margin:0">${showAll ? 'All devices' : 'Your devices'}</h2><span class="spacer"></span>
       ${S.me.is_admin ? `<a class="btn sm" href="#/devices${showAll ? '' : '?all=1'}">${showAll ? 'Show only mine' : 'Show all users'}</a>` : ''}</div>

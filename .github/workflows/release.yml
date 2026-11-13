@@ -101,6 +101,62 @@ jobs:
           path: out/windows/
           retention-days: 7
 
+  # Panels for Adobe apps: InDesign and Photoshop (.ccx) and the Illustrator
+  # extension, signed into a .zxp with Adobe's ZXPSignCmd (pinned below).
+  # A certificate from the secrets ZXP_CERT_P12_BASE64 / ZXP_CERT_PASSWORD
+  # is used when set; otherwise a self-signed one, which CEP accepts.
+  adobe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build packages
+        shell: bash
+        run: |
+          set -e
+          V=${GITHUB_REF_NAME}
+          [ "${GITHUB_REF_TYPE}" = tag ] || V=$(git describe --tags --always)
+          go run ./tools/adobeplugins -version "$V" -out out/adobe
+      - name: Sign the Illustrator extension
+        shell: pwsh
+        env:
+          ZXP_CERT_P12_BASE64: ${{ secrets.ZXP_CERT_P12_BASE64 }}
+          ZXP_CERT_PASSWORD: ${{ secrets.ZXP_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/ab5e4e3e53a42fad08e1225a22a991bb1ffe73f6/ZXPSignCMD/4.1.103/win64/ZXPSignCmd.exe'
+          Invoke-WebRequest -Uri $url -OutFile ZXPSignCmd.exe
+          $hash = (Get-FileHash ZXPSignCmd.exe -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'dc2e711a46504830062ac1afede1f8ee08c1e21399b6c30d7d38cf907c35bcf5') { throw "ZXPSignCmd checksum mismatch: $hash" }
+          if ($env:ZXP_CERT_P12_BASE64) {
+            [IO.File]::WriteAllBytes("$PWD/cert.p12", [Convert]::FromBase64String($env:ZXP_CERT_P12_BASE64))
+            $pw = $env:ZXP_CERT_PASSWORD
+          } else {
+            $pw = [guid]::NewGuid().ToString('N')
+            .\ZXPSignCmd.exe -selfSignedCert DE BY typehaus typehaus $pw cert.p12 -validityDays 3650
+            if ($LASTEXITCODE -ne 0) { throw 'creating the certificate failed' }
+          }
+          .\ZXPSignCmd.exe -sign out/adobe/illustrator out/adobe/typehaus-illustrator.zxp cert.p12 $pw -tsa http://timestamp.digicert.com
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Timestamp server not reachable – signing without a timestamp'
+            Remove-Item out/adobe/typehaus-illustrator.zxp -ErrorAction SilentlyContinue
+            .\ZXPSignCmd.exe -sign out/adobe/illustrator out/adobe/typehaus-illustrator.zxp cert.p12 $pw
+            if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
+          }
+          .\ZXPSignCmd.exe -verify out/adobe/typehaus-illustrator.zxp -certinfo
+          if ($LASTEXITCODE -ne 0) { throw 'the signature does not verify' }
+          Remove-Item cert.p12
+          Remove-Item -Recurse out/adobe/illustrator
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adobe-plugins
+          path: out/adobe/
+          retention-days: 7
+
   # Linux programs and packages (deb, rpm: packaging/linux)
   linux:
     runs-on: ubuntu-latest
@@ -163,13 +219,17 @@ jobs:
   # 1) image without the Mac app (the cross-compiled macOS command-line
   #    agent is included); replaced by the full image in macos-finish
   image:
-    needs: [windows, linux]
+    needs: [windows, linux, adobe]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: windows-agents
+          path: dist/agents/
+      - uses: actions/download-artifact@v4
+        with:
+          name: adobe-plugins
           path: dist/agents/
       - uses: actions/download-artifact@v4
         with:
@@ -182,7 +242,7 @@ jobs:
   # 2) GitHub release with Windows, Linux and the servers
   binaries:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
+    needs: [windows, linux, adobe]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -192,6 +252,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: windows-agents
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: adobe-plugins
           path: dist/
       - uses: actions/download-artifact@v4
         with:

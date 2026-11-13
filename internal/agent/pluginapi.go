@@ -77,6 +77,10 @@ func (a *Agent) postJSON(ctx context.Context, path string, body, out any) error 
 type PluginStatus struct {
 	protocol.FontStatus
 	Installed bool `json:"installed"`
+	// OnSystem: a font with this PostScript name is installed on this
+	// computer – by typehaus or otherwise. Apps that can't tell missing
+	// fonts themselves (Illustrator) go by this.
+	OnSystem bool `json:"on_system"`
 }
 
 type pluginServer struct {
@@ -94,7 +98,9 @@ func StartPluginAPI(ctx context.Context, log *slog.Logger, agent func() (*Agent,
 		return
 	}
 	p := &pluginServer{log: log, agent: agent, syncNow: syncNow}
-	srv := &http.Server{Handler: p.routes(), ReadHeaderTimeout: 10 * time.Second}
+	h := p.routes()
+	go p.runFileBridge(ctx, h)
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
@@ -193,9 +199,11 @@ func (p *pluginServer) resolve(ctx context.Context, w http.ResponseWriter, fonts
 		return nil, nil, false
 	}
 	have := installedSHAs()
+	sys := SystemFontNames(ctx)
 	out := make([]PluginStatus, len(st))
 	for i, f := range st {
-		out[i] = PluginStatus{FontStatus: f, Installed: f.SHA256 != "" && have[f.SHA256]}
+		out[i] = PluginStatus{FontStatus: f, Installed: f.SHA256 != "" && have[f.SHA256],
+			OnSystem: f.PostScript != "" && sys[strings.ToLower(f.PostScript)]}
 	}
 	return a, out, true
 }
@@ -258,8 +266,11 @@ func (p *pluginServer) activate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	have := installedSHAs()
+	forgetSystemFonts()
+	sys := SystemFontNames(r.Context())
 	for i, f := range out {
 		out[i].Installed = f.SHA256 != "" && have[f.SHA256]
+		out[i].OnSystem = f.PostScript != "" && sys[strings.ToLower(f.PostScript)]
 	}
 	pluginJSON(w, map[string]any{"fonts": out, "complete": len(want) == 0})
 }

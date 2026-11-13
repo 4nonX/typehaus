@@ -379,6 +379,7 @@ func (s *Server) Handler() http.Handler {
 
 	// agent binaries (public: open-source, needed before a device can authenticate)
 	mux.HandleFunc("GET /api/downloads", s.handleListDownloads)
+	mux.HandleFunc("GET /api/downloads/plugins", s.handleListPluginDownloads)
 	mux.HandleFunc("GET /downloads/{name}", s.handleDownload)
 
 	// web UI

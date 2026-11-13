@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 5,
+  "id": "com.typehaus.indesign",
+  "name": "typehaus",
+  "version": "1.0.0",
+  "main": "index.html",
+  "host": { "app": "ID", "minVersion": "18.5.0" },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "typehausPanel",
+      "label": { "default": "typehaus" },
+      "minimumSize": { "width": 230, "height": 160 },
+      "maximumSize": { "width": 2000, "height": 3000 },
+      "preferredDockedSize": { "width": 300, "height": 400 },
+      "preferredFloatingSize": { "width": 300, "height": 400 },
+      "icons": [
+        { "width": 23, "height": 23, "path": "icons/panel.png", "scale": [1, 2], "theme": ["all"], "species": ["generic"] }
+      ]
+    }
+  ],
+  "icons": [
+    { "width": 48, "height": 48, "path": "icons/plugin.png", "scale": [1, 2], "theme": ["all"], "species": ["pluginList"] }
+  ],
+  "requiredPermissions": {
+    "network": { "domains": ["http://127.0.0.1:47130", "http://localhost:47130"] },
+    "localFileSystem": "fullAccess"
+  }
+}

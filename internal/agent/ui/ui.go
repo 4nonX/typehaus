@@ -126,6 +126,18 @@ func (s *Server) routes() http.Handler {
 		s.c.Affinity().Check()
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
+	mux.HandleFunc("POST /api/adobe/install", s.api(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		msg, err := s.c.InstallAdobePlugin(r.Context(), req.ID)
+		if err != nil {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"message": msg})
+	}))
 	mux.HandleFunc("GET /font/{sha}", s.font)
 
 	return s.guard(mux)
@@ -195,6 +207,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"notice":      agent.InstallNotice(),
 		"update":      s.c.Update(),
 		"affinity":    s.c.Affinity().State(),
+		"adobe":       agent.AdobePlugins(),
 	})
 }
 

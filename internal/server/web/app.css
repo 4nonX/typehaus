@@ -398,3 +398,8 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .embed .tokbox code { font-size: 12.5px; overflow-wrap: anywhere; }
 .kitfonts { max-height: 300px; }
 .kfilter { margin-bottom: 8px; width: 100%; }
+
+/* devices: plugins for design apps */
+.dplugins { margin-top: 18px; }
+.plist { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 12px 0; }
+.pitem { display: grid; gap: 4px; align-content: start; justify-items: start; border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
