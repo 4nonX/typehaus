@@ -213,6 +213,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *aut
 	}
 	s.pruneActivations()
 	s.audit(u, "user.update", "user %d", id)
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

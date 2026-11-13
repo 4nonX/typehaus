@@ -688,6 +688,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request, u *authU
 	replaced := s.resolveConflicts(u.ID, ids)
 	if n > 0 {
 		s.audit(u, "font.activate", "%d font(s)", n)
+		s.usageChanged()
 	}
 	if refused == nil {
 		refused = []string{}
@@ -718,6 +719,7 @@ func (s *Server) handleDeactivate(w http.ResponseWriter, r *http.Request, u *aut
 	n, _ := res.RowsAffected()
 	if n > 0 {
 		s.audit(u, "font.deactivate", "%d font(s)", n)
+		s.usageChanged()
 	}
 	// fonts the organisation installs stay, whatever the user switched off
 	var kept int64

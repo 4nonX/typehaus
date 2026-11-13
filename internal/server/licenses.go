@@ -56,7 +56,10 @@ type licenseRow struct {
 	Users       int          `json:"users"`
 	Devices     int          `json:"devices"`
 	Machines    int          `json:"machine_devices"` // computers installing it for all users
-	Used        int          `json:"used"`            // users or devices, per seat unit
+	PeakUsers   int          `json:"peak_users"`      // highest daily value, last 12 months
+	PeakDevices int          `json:"peak_devices"`
+	PeakOver    bool         `json:"peak_over"` // more than the seats at some point in the last 12 months
+	Used        int          `json:"used"`      // users or devices, per seat unit
 	Holder      bool         `json:"holder"`
 	Expired     bool         `json:"expired"`
 	ExpiresIn   *int         `json:"expires_in_days,omitempty"`
@@ -76,6 +79,8 @@ func (l *licenseRow) status() string {
 		return "expires soon"
 	case l.SharedInstalls():
 		return "installed for all users"
+	case l.PeakOver:
+		return "over seats within the last 12 months"
 	case l.Full:
 		return "all seats in use"
 	}
@@ -122,6 +127,7 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	if where != "" {
 		q += " WHERE " + where
 	}
+	peaks := s.peaks() // before the list query: one database connection
 	rows, err := s.db.Query(q+` ORDER BY l.name COLLATE NOCASE`, append([]any{u.ID}, args...)...)
 	if err != nil {
 		return nil, err
@@ -146,6 +152,13 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 		l.Expired, l.ExpiresIn = expiry(l.ExpiresOn, nowT)
 		l.Over = l.Seats > 0 && l.Used > l.Seats
 		l.Full = l.Seats > 0 && l.Used >= l.Seats
+		p := peaks[l.ID]
+		l.PeakUsers, l.PeakDevices = max(p.Users, l.Users), max(p.Devices, l.Devices)
+		peak := l.PeakUsers
+		if l.SeatUnit == "devices" {
+			peak = l.PeakDevices
+		}
+		l.PeakOver = l.Seats > 0 && peak > l.Seats
 		if !u.IsAdmin {
 			l.Reference, l.Notes = "", ""
 		}
@@ -983,7 +996,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		map[string]string{"filename": "typehaus-licenses-" + time.Now().Format(dateLayout) + ".csv"}))
 	w.Write([]byte("\ufeff")) // Excel: UTF-8
 	cw := csv.NewWriter(w)
-	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Status", "Enforced",
+	cw.Write([]string{"License", "Type", "Vendor", "Usage rights", "Seats", "Seat unit", "In use", "Peak (12 months)", "Status", "Enforced",
 		"Direct download", "Purchased", "Expires", "Reference", "Families", "Styles", "Users with active fonts", "Devices", "All-users installs", "Terms URL", "Documents"})
 	for _, l := range ls {
 		seats := "unlimited"
@@ -998,7 +1011,11 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		if l.Enforce {
 			enforced = "yes"
 		}
-		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used),
+		peak := l.PeakUsers
+		if l.SeatUnit == "devices" {
+			peak = l.PeakDevices
+		}
+		cw.Write([]string{l.Name, l.Kind, l.Vendor, strings.Join(l.Rights, ", "), seats, l.SeatUnit, strconv.Itoa(l.Used), strconv.Itoa(peak),
 			l.status(), enforced, yesNo(l.Download), l.PurchasedOn, l.ExpiresOn, l.Reference, strconv.Itoa(l.Families), strconv.Itoa(l.Fonts),
 			strings.Join(holders[l.ID], ", "), strconv.Itoa(l.Devices), strconv.Itoa(l.Machines), l.URL, strings.Join(docs, "; ")})
 	}

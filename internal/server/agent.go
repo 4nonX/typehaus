@@ -373,6 +373,7 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request, d *au
 	for _, e := range rep.Errors {
 		s.log.Warn("agent reported error", "device", d.ID, "user", d.User, "sha256", e.SHA256, "error", trunc(e.Message, 300))
 	}
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

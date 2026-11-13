@@ -134,6 +134,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 		// ever administer typehaus.
 		return nil, errors.New("TYPEHAUS_LOCAL_LOGIN=false requires TYPEHAUS_OIDC_GROUPS_CLAIM and TYPEHAUS_OIDC_ADMIN_GROUP, otherwise nobody can sign in as administrator")
 	}
+	s.recordUsage()
 	go s.janitor(ctx)
 	return s, nil
 }
@@ -181,6 +182,7 @@ func (s *Server) janitor(ctx context.Context) {
 		n := now()
 		s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, n)
 		s.db.Exec(`DELETE FROM enroll_codes WHERE expires_at < ?`, n)
+		s.recordUsage()
 		tmp := filepath.Join(s.cfg.DataDir, "tmp")
 		if ents, err := os.ReadDir(tmp); err == nil {
 			for _, e := range ents {
@@ -262,6 +264,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/licenses", s.user(s.handleListLicenses)) // non-admins: licenses of fonts they can see
 	mux.Handle("GET /api/licenses/{id}", s.user(s.handleGetLicense))
 	mux.Handle("GET /api/licenses/export.csv", s.admin(s.handleLicenseReport))
+	mux.Handle("GET /api/licenses/history.csv", s.admin(s.handleUsageCSV))
+	mux.Handle("GET /api/licenses/{id}/history", s.admin(s.handleLicenseHistory))
 	mux.Handle("POST /api/licenses", s.admin(s.handleCreateLicense))
 	mux.Handle("POST /api/licenses/detect", s.admin(s.handleDetectLicenses))
 	mux.Handle("PATCH /api/licenses/{id}", s.admin(s.handleUpdateLicense))

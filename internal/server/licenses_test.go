@@ -305,3 +305,49 @@ func TestAllUsersInstalls(t *testing.T) {
 		}
 	}
 }
+
+// Usage history keeps the day's maximum, so a peak survives deactivation.
+func TestUsageHistory(t *testing.T) {
+	s, ts, admin := newTestServer(t)
+	uploadFiles(t, admin, map[string][]byte{"Poppins-Regular.ttf": fixture(t, "Poppins-Regular.ttf")})
+	var fonts []fontRow
+	admin.do("GET", "/api/fonts", nil, &fonts)
+	font := fonts[0].ID
+	var lic map[string]int64
+	admin.do("POST", "/api/licenses", map[string]any{"name": "One seat", "seats": 1}, &lic)
+	admin.do("PATCH", "/api/fonts", map[string]any{"font_ids": []int64{font}, "license_id": lic["id"]}, nil)
+
+	var col map[string]int64
+	admin.do("POST", "/api/collections", map[string]any{"name": "All", "everyone": true}, &col)
+	admin.do("POST", "/api/collections/"+itoa(col["id"])+"/fonts", map[string]any{"font_ids": []int64{font}}, nil)
+	admin.do("POST", "/api/users", map[string]any{"username": "gil", "password": "gilpassword1"}, nil)
+	gil := newClient(t, ts.URL)
+	gil.do("POST", "/api/auth/login", map[string]string{"username": "gil", "password": "gilpassword1"}, nil)
+
+	admin.do("POST", "/api/activations", map[string]any{"font_ids": []int64{font}}, nil)
+	gil.do("POST", "/api/activations", map[string]any{"font_ids": []int64{font}}, nil)
+	s.recordUsage() // two people now
+	gil.do("DELETE", "/api/activations", map[string]any{"font_ids": []int64{font}}, nil)
+	s.recordUsage() // one now – the day keeps two
+
+	var hist []usagePoint
+	admin.do("GET", "/api/licenses/"+itoa(lic["id"])+"/history", nil, &hist)
+	if len(hist) != 1 || hist[0].Users != 2 || hist[0].Day != usageDay(time.Now()) {
+		t.Fatalf("history: %+v", hist)
+	}
+	var lics []licenseRow
+	admin.do("GET", "/api/licenses", nil, &lics)
+	for _, l := range lics {
+		if l.ID == lic["id"] && (l.Used != 1 || l.PeakUsers != 2 || !l.PeakOver || l.status() != "over seats within the last 12 months") {
+			t.Fatalf("peak: used=%d peak=%d over=%v status=%q", l.Used, l.PeakUsers, l.PeakOver, l.status())
+		}
+	}
+	st, _, body := admin.get("/api/licenses/history.csv")
+	if st != 200 || !strings.Contains(body, "One seat") || !strings.Contains(body, usageDay(time.Now())) {
+		t.Fatalf("usage csv: %d %s", st, body)
+	}
+	st, _, body = admin.get("/api/licenses/export.csv")
+	if !strings.Contains(body, "Peak (12 months)") {
+		t.Fatalf("report lacks peak column: %s", body)
+	}
+}

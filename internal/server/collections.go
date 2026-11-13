@@ -174,6 +174,7 @@ func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request, 
 	}
 	s.pruneActivations()
 	s.audit(u, "collection.update", "collection %d", id)
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -188,6 +189,7 @@ func (s *Server) handleDeleteCollection(w http.ResponseWriter, r *http.Request, 
 	s.db.Exec(`DELETE FROM collections WHERE id = ?`, id)
 	s.pruneActivations()
 	s.audit(u, "collection.delete", "%s", name)
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -214,6 +216,7 @@ func (s *Server) handleCollectionAddFonts(w http.ResponseWriter, r *http.Request
 			SELECT c.id, f.id FROM collections c, fonts f WHERE c.id = ? AND f.id = ?`, id, f)
 	}
 	s.audit(u, "collection.add", "%d font(s) → collection %d", len(req.FontIDs), id)
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -235,6 +238,7 @@ func (s *Server) handleCollectionRemoveFonts(w http.ResponseWriter, r *http.Requ
 	}
 	s.pruneActivations()
 	s.audit(u, "collection.remove", "%d font(s) ← collection %d", len(req.FontIDs), id)
+	s.usageChanged()
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

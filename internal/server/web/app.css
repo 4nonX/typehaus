@@ -267,3 +267,15 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .req { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; justify-items: start; }
 .req.new { border-color: var(--accent); }
 .pre { white-space: pre-wrap; }
+
+/* ---- usage chart ---- */
+.uchart { position: relative; }
+.uchart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.uchart .grid { stroke: var(--rule); stroke-width: 1; }
+.uchart .ax { fill: var(--ink-3); font: 11px var(--sans); }
+.uchart .seats { stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.uchart .use { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.uchart .dot { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.uchart .hit { fill: transparent; cursor: crosshair; }
+.uchart .tip { position: absolute; top: -6px; background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; font-size: 12px; pointer-events: none; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.warnt { color: var(--warn); }

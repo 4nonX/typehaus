@@ -997,6 +997,7 @@ function statusBadges(l) {
   if (l.expired) b.push('<span class="badge danger">expired</span>');
   else if (l.expires_in_days != null && l.expires_in_days <= 30) b.push(`<span class="badge warn">expires in ${plural(l.expires_in_days, 'day')}</span>`);
   if (l.over) b.push('<span class="badge danger">over seats</span>');
+  else if (l.peak_over) b.push('<span class="badge warn" title="More in use than seats at some point in the last 12 months">over seats in the last year</span>');
   else if (l.full) b.push('<span class="badge warn">all seats in use</span>');
   if (l.enforce) b.push('<span class="badge" title="Seats and term are enforced: no activations beyond the seats, nothing installed after expiry">enforced</span>');
   return b.join(' ');
@@ -1097,7 +1098,8 @@ async function renderLicenses(page) {
     <div class="row"><div><h1>Licenses</h1><p class="sub">What you bought, what it allows, who uses it – and the documents that prove it.</p></div>
       <span class="spacer"></span>
       <button class="btn" id="detect" title="Assign open-source licenses (OFL, Apache, …) to fonts whose embedded license information names one">Detect open-source licenses</button>
-      <a class="btn" href="/api/licenses/export.csv" download>Export CSV</a>
+      <a class="btn" href="/api/licenses/export.csv" download title="Licenses, seats, usage, peaks and documents">Export CSV</a>
+      <a class="btn" href="/api/licenses/history.csv" download title="Daily usage per license, last 12 months">Usage history</a>
       <button class="btn primary" id="new">New license</button></div>
     ${attention.length ? `<div class="alert warnbox">${attention.map((l) => `<div><b>${esc(l.name)}</b>: ${[
       l.expired && `expired on ${esc(l.expires_on)}`,
@@ -1108,7 +1110,8 @@ async function renderLicenses(page) {
       ${lics.map((l) => `<tr>
         <td><a href="#" class="lname" data-open="${l.id}">${esc(l.name)}</a> ${l.kind === 'open' ? '<span class="badge open">open source</span>' : ''} ${statusBadges(l)}
           <div class="small muted">${[l.vendor, rightsSummary(l)].filter(Boolean).map(esc).join(' · ')}</div></td>
-        <td class="nowrap">${meter(l)} <span class="small muted">${l.seat_unit}</span></td>
+        <td class="nowrap">${meter(l)} <span class="small muted">${l.seat_unit}</span>
+          <div class="small ${l.peak_over ? 'warnt' : 'muted'}">peak 12 mo: ${l.seat_unit === 'devices' ? l.peak_devices : l.peak_users}</div></td>
         <td class="small">${termText(l)}</td>
         <td class="num">${l.documents.length || '<span class="muted">–</span>'}</td>
         <td class="num">${l.families}</td>
@@ -1198,9 +1201,62 @@ function editLicense(l, done) {
   return d;
 }
 
+// Daily usage over the last year as a step line, with the seats as a
+// reference. One series: no legend, the heading names it.
+function usageChart(points, l) {
+  const unit = l.seat_unit === 'devices' ? 'devices' : 'users';
+  const vals = points.map((p) => ({ day: p.day, v: p[unit] }));
+  if (!vals.length) return '<p class="small muted">No usage recorded yet – typehaus records it from now on, daily.</p>';
+  const W = 600, H = 150, P = { l: 30, r: 10, t: 10, b: 20 };
+  const t0 = Date.parse(vals[0].day), t1 = Math.max(Date.parse(vals[vals.length - 1].day), t0 + 86400000);
+  const ymax = Math.max(1, l.seats || 0, ...vals.map((p) => p.v));
+  const x = (d) => P.l + (Date.parse(d) - t0) / (t1 - t0) * (W - P.l - P.r);
+  const y = (v) => H - P.b - v / ymax * (H - P.t - P.b);
+  let path = '';
+  vals.forEach((p, i) => { path += i ? ` H${x(p.day).toFixed(1)} V${y(p.v).toFixed(1)}` : `M${x(p.day).toFixed(1)} ${y(p.v).toFixed(1)}`; });
+  path += ` H${(W - P.r).toFixed(1)}`;
+  const ticks = [0, Math.round(ymax / 2), ymax].filter((v, i, a) => a.indexOf(v) === i);
+  const fmt = (d) => new Date(d).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+  return `<div class="uchart" data-unit="${unit}">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily ${unit} using this license">
+      ${ticks.map((v) => `<line class="grid" x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${P.l - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('')}
+      <text class="ax" x="${P.l}" y="${H - 4}">${fmt(vals[0].day)}</text>
+      <text class="ax" x="${W - P.r}" y="${H - 4}" text-anchor="end">${fmt(vals[vals.length - 1].day)}</text>
+      ${l.seats ? `<line class="seats" x1="${P.l}" x2="${W - P.r}" y1="${y(l.seats)}" y2="${y(l.seats)}"/><text class="ax" x="${P.l + 4}" y="${y(l.seats) - 4}">${l.seats} seats</text>` : ''}
+      <path class="use" d="${path}"/>
+      <circle class="dot" r="4" cx="-10" cy="-10"/>
+      <rect class="hit" x="${P.l}" y="0" width="${W - P.l - P.r}" height="${H}"/>
+    </svg><div class="tip" hidden></div></div>`;
+}
+
+function wireUsageChart(box, points, l) {
+  const el = $('.uchart', box);
+  if (!el) return;
+  const unit = el.dataset.unit, svg = $('svg', el), tip = $('.tip', el), dot = $('.dot', el);
+  const vals = points.map((p) => ({ day: p.day, v: p[unit] }));
+  const W = 600, Pl = 30, Pr = 10;
+  const t0 = Date.parse(vals[0].day), t1 = Math.max(Date.parse(vals[vals.length - 1].day), t0 + 86400000);
+  $('.hit', el).addEventListener('mousemove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const sx = (e.clientX - r.left) / r.width * W;
+    const t = t0 + (sx - Pl) / (W - Pl - Pr) * (t1 - t0);
+    let p = vals[0];
+    for (const q of vals) { if (Date.parse(q.day) <= t) p = q; }
+    const cx = Pl + (Date.parse(p.day) - t0) / (t1 - t0) * (W - Pl - Pr);
+    const ymax = Math.max(1, l.seats || 0, ...vals.map((q) => q.v));
+    dot.setAttribute('cx', cx); dot.setAttribute('cy', 150 - 20 - p.v / ymax * 120);
+    tip.hidden = false;
+    tip.innerHTML = `<b>${p.v}</b> ${unit} <span class="muted">· ${new Date(p.day).toLocaleDateString()}</span>`;
+    tip.style.left = `${Math.min(r.width - 140, Math.max(0, cx / W * r.width - 60))}px`;
+  });
+  $('.hit', el).addEventListener('mouseleave', () => { tip.hidden = true; dot.setAttribute('cx', -10); });
+}
+
 async function licenseDetail(id, done) {
-  let r;
-  try { r = await api('GET', `/api/licenses/${id}`); } catch (e) { fail(e); return; }
+  let r, hist = [];
+  try {
+    [r, hist] = await Promise.all([api('GET', `/api/licenses/${id}`), api('GET', `/api/licenses/${id}/history`)]);
+  } catch (e) { fail(e); return; }
   const l = r.license;
   const d = dialog(l.name, `
     ${licenseCard({ ...l, documents: [] })}
@@ -1216,11 +1272,14 @@ async function licenseDetail(id, done) {
     <div class="docup"><button type="button" class="btn sm" id="doc-add">Attach files…</button>
       <label class="small"><input type="checkbox" id="doc-sharednew" checked> visible to users</label>
       <input type="file" id="doc-file" multiple hidden></div>
+    <h4>Usage, last 12 months <span class="muted small">peak ${l.seat_unit === 'devices' ? l.peak_devices : l.peak_users} ${l.seat_unit}</span></h4>
+    ${usageChart(hist, l)}
     <h4>Fonts <span class="muted small">${plural(r.families.length, 'family', 'families')}</span></h4>
     <p class="small">${r.families.map((f) => `${esc(f.family)} <span class="muted">(${f.styles})</span>`).join(', ') || '<span class="muted">None assigned – select fonts in the Library and choose “Assign license”.</span>'}</p>
     <h4>${l.seat_unit === 'devices' ? 'Devices' : 'People'} holding a seat <span class="muted small">${seatText(l)}</span></h4>
     <p class="small">${(r.holders || []).map((h) => `${esc(h.name)}${h.extra ? ` <span class="muted">(${esc(h.extra)})</span>` : ''}`).join(', ') || '<span class="muted">Nobody yet.</span>'}</p>`,
   { submit: 'Close', cancel: false, wide: true, onSubmit: async () => {} });
+  if (hist.length) wireUsageChart(d, hist, l);
   const reopen = () => { d.close(); done(); licenseDetail(id, done); };
   $('#doc-add', d).onclick = () => $('#doc-file', d).click();
   $('#doc-file', d).onchange = async (e) => {
