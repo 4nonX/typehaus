@@ -304,6 +304,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/agent/fonts/{sha}", s.device(s.handleAgentFont))
 	mux.Handle("POST /api/agent/report", s.device(s.handleAgentReport))
 	mux.Handle("POST /api/agent/inventory", s.device(s.handleAgentInventory))
+	mux.Handle("POST /api/agent/fonts/resolve", s.device(s.handlePluginResolve))
+	mux.Handle("POST /api/agent/fonts/activate", s.device(s.handlePluginActivate))
+	mux.Handle("POST /api/agent/requests", s.device(s.handlePluginRequest))
 	mux.Handle("GET /api/inventory", s.admin(s.handleInventory))
 	mux.Handle("GET /api/inventory.csv", s.admin(s.handleInventoryCSV))
 

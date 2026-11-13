@@ -203,6 +203,16 @@ func cmdTray(autostart bool) error {
 	if err != nil {
 		return err
 	}
+	// plugins (InDesign, Photoshop, Illustrator, Affinity) ask this app
+	pctx, stopPlugins := context.WithCancel(context.Background())
+	defer stopPlugins()
+	agent.StartPluginAPI(pctx, log, func() (*agent.Agent, error) {
+		cfg, err := agent.LoadConfig()
+		if err != nil {
+			return nil, err
+		}
+		return agent.New(cfg, log)
+	}, c.SyncNow)
 	agent.PublishInstance(win.URL())
 	defer agent.ClearInstance()
 	// until the tray (or background loop) takes over, a quit request exits
@@ -261,6 +271,13 @@ func cmdRun(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// plugins ask this app about documents' fonts
+	agent.StartPluginAPI(ctx, log, func() (*agent.Agent, error) { return a, nil }, func() {
+		select {
+		case a.SyncNow <- struct{}{}:
+		default:
+		}
+	})
 	err = a.Run(ctx)
 	if errors.Is(err, agent.ErrRevoked) {
 		if !cfg.KeepOnRevoke {

@@ -144,6 +144,9 @@ func main() {
 		verifyUserRemoved(e, f)
 	}
 
+	step("plugin API: a document's missing fonts are switched on through the running app")
+	e.pluginFlow(expected)
+
 	step("revoke the device: agent must refuse to sync")
 	e.api("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
 	e.agent("sync")
@@ -431,4 +434,125 @@ func mustNotExist(p string) {
 		fail("file should be gone: %s", p)
 	}
 	fmt.Println("ok: file removed", p)
+}
+
+// pluginFlow runs the app headless (as at login) and acts like an app plugin:
+// it asks about a document's fonts, switches the missing ones on and expects
+// them installed when the answer comes.
+func (e *env) pluginFlow(expected map[string]bool) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	check(err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	cmd := exec.Command(*agentBin, "run")
+	cmd.Env = append(append(os.Environ(), e.extra...), fmt.Sprintf("TYPEHAUS_PLUGIN_PORT=%d", port))
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	check(cmd.Start())
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		if failed {
+			fmt.Println("---- agent run output ----\n" + out.String())
+		}
+	}()
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	call := func(method, path string, body any, v any) int {
+		var rd io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		}
+		req, _ := http.NewRequest(method, base+path, rd)
+		req.Header.Set("X-Typehaus-Plugin", "1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+		if err != nil {
+			return 0
+		}
+		defer resp.Body.Close()
+		if v != nil {
+			json.NewDecoder(resp.Body).Decode(v)
+		}
+		return resp.StatusCode
+	}
+	waitFor("plugin API", 20*time.Second, func() bool {
+		var st map[string]any
+		return call("GET", "/v1/status", nil, &st) == 200 && st["connected"] == true
+	})
+
+	var lib []struct {
+		SHA256     string `json:"sha256"`
+		PostScript string `json:"postscript_name"`
+		Family     string `json:"family"`
+		Style      string `json:"style"`
+	}
+	e.api("GET", "/api/fonts", nil, &lib)
+	var doc []map[string]string
+	for _, f := range lib {
+		doc = append(doc, map[string]string{"postscript_name": f.PostScript, "family": f.Family, "style": f.Style})
+	}
+	doc = append(doc, map[string]string{"postscript_name": "Futura-Bold", "family": "Futura", "style": "Bold"})
+	type fontStatus struct {
+		Status    string `json:"status"`
+		SHA256    string `json:"sha256"`
+		Installed bool   `json:"installed"`
+		Reason    string `json:"reason"`
+	}
+	var chk struct{ Fonts []fontStatus }
+	if st := call("POST", "/v1/fonts/check", map[string]any{"fonts": doc, "app": "e2e"}, &chk); st != 200 || len(chk.Fonts) != len(doc) {
+		fail("check: %d %+v", st, chk)
+	}
+	for i, f := range chk.Fonts {
+		switch {
+		case i == len(doc)-1:
+			if f.Status != "not_available" {
+				fail("Futura should be not_available: %+v", f)
+			}
+		case expected[f.SHA256]:
+			if f.Status != "available" || f.Installed {
+				fail("%s should be available and not installed: %+v", doc[i]["postscript_name"], f)
+			}
+		default:
+			if f.Status != "unsupported" {
+				fail("%s isn't for %s – want unsupported: %+v", doc[i]["postscript_name"], runtime.GOOS, f)
+			}
+		}
+	}
+	var act struct {
+		Fonts    []fontStatus
+		Complete bool
+	}
+	if st := call("POST", "/v1/fonts/activate", map[string]any{"fonts": doc, "app": "e2e"}, &act); st != 200 || !act.Complete {
+		fail("activate: %d %+v", st, act)
+	}
+	n := 0
+	for _, f := range act.Fonts {
+		if expected[f.SHA256] {
+			if f.Status != "active" || !f.Installed {
+				fail("after activate: %+v", f)
+			}
+			n++
+		}
+	}
+	inst := e.installed(e.home)
+	if n != len(expected) || len(inst) != len(expected) {
+		fail("plugin activation: %d reported, %d installed, want %d", n, len(inst), len(expected))
+	}
+	for _, f := range inst {
+		verifyUserInstalled(e, f)
+	}
+	fmt.Printf("ok: %d font(s) switched on by a plugin and installed while it waited\n", n)
+	if st := call("POST", "/v1/requests", map[string]any{"font": "Futura Bold", "app": "e2e"}, nil); st != 201 {
+		fail("request: %d", st)
+	}
+	// web pages are refused
+	req, _ := http.NewRequest("POST", base+"/v1/fonts/check", strings.NewReader(`{"fonts":[]}`))
+	req.Header.Set("X-Typehaus-Plugin", "1")
+	req.Header.Set("Origin", "https://evil.example")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 403 {
+		fail("web origin must be refused")
+	} else {
+		resp.Body.Close()
+	}
 }

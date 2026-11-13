@@ -88,3 +88,37 @@ type ReportError struct {
 	SHA256  string `json:"sha256"`
 	Message string `json:"message"`
 }
+
+// ---- plugins (via the typehaus app) ------------------------------------------
+
+// FontRef names a font the way a document does.
+type FontRef struct {
+	PostScript string `json:"postscript_name,omitempty"`
+	Family     string `json:"family,omitempty"`
+	Style      string `json:"style,omitempty"`
+}
+
+// FontStatus says what typehaus can do about a font a document uses.
+type FontStatus struct {
+	FontRef
+	// active: the user has it (switched on or installed by a collection);
+	// available: in the user's library, can be switched on; refused: in the
+	// library, but a license doesn't allow it now (Reason); unsupported: its
+	// format can't be installed on this computer's system (Reason);
+	// not_available: not in the user's library – request it.
+	Status   string `json:"status"`
+	FontID   int64  `json:"font_id,omitempty"`
+	SHA256   string `json:"sha256,omitempty"` // the file the app installs
+	Family   string `json:"library_family,omitempty"`
+	Style    string `json:"library_style,omitempty"`
+	FullName string `json:"full_name,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type ResolveRequest struct {
+	Fonts []FontRef `json:"fonts"`
+}
+
+type ResolveResponse struct {
+	Fonts []FontStatus `json:"fonts"`
+}

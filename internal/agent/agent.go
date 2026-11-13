@@ -291,6 +291,9 @@ type Agent struct {
 	// OnApply, if set, is called before fonts are installed or removed with
 	// the number of pending changes (used to animate the tray icon).
 	OnApply func(changes int)
+
+	// SyncNow wakes Run for an immediate sync (plugins activating fonts).
+	SyncNow chan struct{}
 }
 
 // New creates an agent for an enrolled device.
@@ -303,7 +306,7 @@ func New(cfg *Config, log *slog.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{cfg: cfg, hc: hc, log: log, sys: sys}, nil
+	return &Agent{cfg: cfg, hc: hc, log: log, sys: sys, SyncNow: make(chan struct{}, 1)}, nil
 }
 
 func (a *Agent) do(ctx context.Context, method, path string, body io.Reader, hdr map[string]string) (*http.Response, error) {
@@ -730,6 +733,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(wait):
+		case <-a.SyncNow:
 		}
 	}
 }
