@@ -342,6 +342,11 @@ CREATE INDEX webhook_deliveries_due ON webhook_deliveries(status, next_at);
 CREATE INDEX webhook_deliveries_hook ON webhook_deliveries(webhook_id, id);
 CREATE TABLE webhook_once (key TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
 `,
+	// 23: settings keeps the keys of outside services an admin entered;
+	// fonts.catalog_ref remembers which free catalog family a font came from.
+	`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+ALTER TABLE fonts ADD COLUMN catalog_ref TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

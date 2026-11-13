@@ -956,19 +956,12 @@ func (s *Server) autoLicense(ids []int64) (int, []string, error) {
 		if len(fids) == 0 {
 			continue
 		}
-		var lid int64
-		err := s.db.QueryRow(`SELECT id FROM licenses WHERE spdx = ? ORDER BY id LIMIT 1`, ol.SPDX).Scan(&lid)
-		if errors.Is(err, sql.ErrNoRows) {
-			res, err := s.db.Exec(`INSERT INTO licenses (name, kind, spdx, rights, url, notes, created_at)
-				VALUES (?, 'open', ?, ?, ?, 'Recognised automatically from the fonts'' embedded license information.', ?)`,
-				ol.Name, ol.SPDX, strings.Join(licenseRights, ","), ol.URL, now())
-			if err != nil {
-				return n, created, err
-			}
-			lid, _ = res.LastInsertId()
-			created = append(created, ol.Name)
-		} else if err != nil {
+		lid, isNew, err := s.openLicenseID(&ol)
+		if err != nil {
 			return n, created, err
+		}
+		if isNew {
+			created = append(created, ol.Name)
 		}
 		res, err := s.db.Exec(`UPDATE fonts SET license_id = ? WHERE license_id IS NULL AND id IN (`+placeholders(len(fids))+`)`,
 			append([]any{lid}, int64Args(fids)...)...)
@@ -979,6 +972,36 @@ func (s *Server) autoLicense(ids []int64) (int, []string, error) {
 		n += int(k)
 	}
 	return n, created, nil
+}
+
+// openLicenseID returns the license record for an open license, creating
+// it the first time.
+func (s *Server) openLicenseID(ol *openLicense) (int64, bool, error) {
+	var lid int64
+	err := s.db.QueryRow(`SELECT id FROM licenses WHERE spdx = ? ORDER BY id LIMIT 1`, ol.SPDX).Scan(&lid)
+	if err == nil {
+		return lid, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	res, err := s.db.Exec(`INSERT INTO licenses (name, kind, spdx, rights, url, notes, created_at)
+		VALUES (?, 'open', ?, ?, ?, 'Recognised automatically from the fonts'' embedded license information.', ?)`,
+		ol.Name, ol.SPDX, strings.Join(licenseRights, ","), ol.URL, now())
+	if err != nil {
+		return 0, false, err
+	}
+	lid, _ = res.LastInsertId()
+	return lid, true, nil
+}
+
+func openLicenseBySPDX(id string) *openLicense {
+	for i := range openLicenses {
+		if openLicenses[i].SPDX == id {
+			return &openLicenses[i]
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleDetectLicenses(w http.ResponseWriter, r *http.Request, u *authUser) {

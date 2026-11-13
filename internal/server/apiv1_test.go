@@ -142,7 +142,7 @@ func TestAPITokens(t *testing.T) {
 // The contract: every v1 route is in the OpenAPI description and every
 // JSON response of the GET routes matches its schema.
 func TestAPIv1Contract(t *testing.T) {
-	_, ts, admin := newTestServer(t)
+	s, ts, admin := newTestServer(t)
 	uploadFiles(t, admin, map[string][]byte{"Poppins-Regular.ttf": fixture(t, "Poppins-Regular.ttf")})
 	var fonts []fontRow
 	admin.do("GET", "/api/fonts", nil, &fonts)
@@ -163,6 +163,7 @@ func TestAPIv1Contract(t *testing.T) {
 	admin.do("POST", "/api/webhooks/"+itoa(hook.ID)+"/test", nil, nil)
 	waitDelivered(t, admin, hook.ID)
 	tok := newToken(t, admin, "Contract", "read")
+	fakeUpstream(t, s, ts)
 
 	st, b, _ := apiCall(t, ts.URL, "", "GET", "/api/v1/openapi.json", nil)
 	if st != 200 {
@@ -203,8 +204,11 @@ func TestAPIv1Contract(t *testing.T) {
 			path = strings.Replace(path, "{id}", ids["{id}"], 1)
 		}
 		q := ""
-		if rt.Path == "/devices" {
+		switch rt.Path {
+		case "/devices":
 			q = "?all=1"
+		case "/lookup":
+			q = "?name=Poppins"
 		}
 		st, body, _ := apiCall(t, ts.URL, tok, "GET", "/api/v1"+path+q, nil)
 		if st != 200 {

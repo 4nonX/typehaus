@@ -61,6 +61,11 @@ type Config struct {
 	Inventory bool
 	// APIRate is the requests per minute one API token may send (0 = no limit).
 	APIRate int
+	// Catalog offers the free font catalogs (Google Fonts, Font Squirrel,
+	// Fontsource); off for servers without internet access.
+	Catalog bool
+	// Identify offers font identification from images.
+	Identify bool
 }
 
 // ConfigFromEnv builds a Config from TYPEHAUS_* variables.
@@ -87,6 +92,8 @@ func ConfigFromEnv() Config {
 		Downloads:        envBool("TYPEHAUS_DOWNLOADS", true),
 		Inventory:        envBool("TYPEHAUS_INVENTORY", false),
 		APIRate:          envInt("TYPEHAUS_API_RATE", 600),
+		Catalog:          envBool("TYPEHAUS_CATALOG", true),
+		Identify:         envBool("TYPEHAUS_IDENTIFY", true),
 	}
 	c.SecureCookies = envBool("TYPEHAUS_SECURE_COOKIES", strings.HasPrefix(c.BaseURL, "https://"))
 	if c.PollSeconds < 10 {
@@ -105,6 +112,10 @@ type Server struct {
 	limiter *loginLimiter
 	// webhookWake starts a delivery round right away
 	webhookWake chan struct{}
+	// outbound talks to the free catalogs and identification services
+	outbound *http.Client
+	catalog  *catalogCache
+	identify *identifyState
 }
 
 // New opens storage and prepares the server.
@@ -120,7 +131,8 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	s := &Server{cfg: cfg, db: db, log: log, blobDir: blobDir, limiter: newLoginLimiter(), webhookWake: make(chan struct{}, 1)}
+	s := &Server{cfg: cfg, db: db, log: log, blobDir: blobDir, limiter: newLoginLimiter(), webhookWake: make(chan struct{}, 1),
+		outbound: &http.Client{Timeout: 2 * time.Minute}, catalog: &catalogCache{}, identify: newIdentifyState()}
 	if err := s.bootstrapAdmin(); err != nil {
 		return nil, err
 	}
@@ -326,6 +338,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/webhooks/{id}/deliveries", s.admin(s.handleListDeliveries))
 	mux.Handle("POST /api/webhooks/{id}/deliveries/{delivery}/redeliver", s.admin(s.handleRedeliver))
 	mux.Handle("GET /api/webhook-events", s.admin(s.handleWebhookEvents))
+	mux.Handle("GET /api/services", s.noTokens(s.admin(s.handleListServices)))
+	mux.Handle("PUT /api/services/{id}", s.noTokens(s.admin(s.handleSetService)))
+
+	// free font catalog and font identification
+	mux.Handle("GET /api/catalog", s.user(s.handleCatalogSearch))
+	mux.Handle("GET /api/catalog/preview/{id}", s.user(s.handleCatalogPreview))
+	mux.Handle("POST /api/catalog/import", s.admin(s.handleCatalogImport))
+	mux.Handle("GET /api/identify", s.user(s.handleIdentifyInfo))
+	mux.Handle("POST /api/identify", s.user(s.handleIdentify))
+	mux.Handle("GET /api/lookup", s.user(s.handleLookup))
+	mux.HandleFunc("GET /identify-image/{token}", s.handleIdentifyImage)
 	s.registerV1(mux)
 
 	// agent binaries (public: open-source, needed before a device can authenticate)
@@ -357,7 +380,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; font-src 'self' blob: data:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			"default-src 'self'; font-src 'self' blob: data:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -538,6 +561,8 @@ var errorCodes = map[string]string{
 	"idempotency_key_reused":  "The Idempotency-Key was already used for a different request.",
 	"idempotency_in_progress": "A request with this Idempotency-Key is still being processed.",
 	"rate_limited":            "Too many requests – wait for Retry-After seconds.",
+	"upstream_error":          "An outside service (a font catalog or identification service) failed or couldn't be reached.",
+	"not_configured":          "The outside service needs an API key, which an administrator enters under Integrations.",
 	"internal_error":          "Something went wrong on the server.",
 }
 

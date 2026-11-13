@@ -394,13 +394,18 @@ func (s *Server) readPart(p *multipart.Part) ([]upFile, []uploadResult) {
 		}
 		return []upFile{{name: name, data: data}}, nil
 	}
+	return s.readZip(name, p)
+}
+
+// readZip expands a zip archive into its files.
+func (s *Server) readZip(name string, src io.Reader) ([]upFile, []uploadResult) {
 	tmp, err := os.CreateTemp(filepath.Join(s.cfg.DataDir, "tmp"), "upload-*.zip")
 	if err != nil {
 		return nil, []uploadResult{{File: name, Status: "error", Message: "server storage error"}}
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	n, err := io.Copy(tmp, p)
+	n, err := io.Copy(tmp, src)
 	if err != nil {
 		return nil, []uploadResult{{File: name, Status: "error", Message: err.Error()}}
 	}

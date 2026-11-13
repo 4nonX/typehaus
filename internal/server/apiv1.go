@@ -173,6 +173,24 @@ func (s *Server) v1Routes() []apiRoute {
 		{Method: "GET", Paged: true, PageField: "findings", Path: "/inventory", Admin: true, H: s.handleInventory, Tag: "Compliance", Summary: "Copies of library fonts found outside typehaus", Resp: inventoryResult{}},
 		{Method: "GET", Path: "/inventory.csv", Admin: true, H: s.handleInventoryCSV, Tag: "Compliance", Summary: "Copies found outside typehaus (CSV)", Produces: "text/csv"},
 		{Method: "GET", Paged: true, Path: "/reports/usage", Admin: true, H: s.handleUsageReport, Tag: "Compliance", Summary: "Usage by family", Resp: []usageRow{}},
+		// free font catalog and identification
+		{Paged: true, Method: "GET", Path: "/catalog", H: s.handleCatalogSearch, Tag: "Catalog", Summary: "Search the free font catalog",
+			Description: "Families from Google Fonts, Font Squirrel and Fontsource. Google Fonts and Font Squirrel families can be imported; other Fontsource families are listed with the reason they can't. Refreshed daily; 404 feature_disabled when TYPEHAUS_CATALOG is off, 502 upstream_error when no catalog could be reached.",
+			Query: []apiParam{{"q", "string", "words in the family or foundry name"},
+				{"category", "string", "sans-serif, serif, display, handwriting or monospace"},
+				{"source", "string", "google, fontsquirrel or fontsource"},
+				{"license", "string", "SPDX id (e.g. OFL-1.1) or Freeware"}}, Resp: []catalogFamily{}},
+		{Method: "POST", Path: "/catalog/import", Admin: true, H: s.handleCatalogImport, Tag: "Catalog", Summary: "Import catalog families into the library",
+			Description: "Downloads the complete families (Google Fonts from Google's repository, Font Squirrel's desktop package) and adds them like an upload. Open licenses are assigned automatically; a Font Squirrel freeware license becomes a license record with the license text attached, for review. Each family reports added, exists or error.",
+			Body:        catalogImportReq{}, Resp: []catalogImportResult{}},
+		{Method: "GET", Path: "/lookup", H: s.handleLookup, Tag: "Catalog", Summary: "Look a font name up in the library and the catalog",
+			Description: "For a name from an identification site: the library families it matches (visible to the caller) and catalog families.",
+			Query:       []apiParam{{"name", "string", "a font or family name, e.g. Helvetica Neue LT Pro 55 Roman"}}, Resp: lookupResponse{}},
+		{Method: "POST", Path: "/identify", H: s.handleIdentify, Tag: "Catalog", Summary: "Identify the font in an image",
+			Description: "Sends the image to every identification service with an API key (WhatFontIs, Mixfont Lens, Aspose.OCR Cloud) and matches the results against the library and the catalog. 409 not_configured when no service has a key; 30 identifications an hour per person.",
+			Multipart:   "image: PNG, JPEG, GIF, WebP or BMP up to 10 MB, or url: a link to one; services (optional): comma-separated service ids; free_only (optional): 1 asks for free fonts only (WhatFontIs)",
+			Resp:        identifyResponse{}},
+
 		// webhooks
 		{Method: "GET", Path: "/webhook-events", Admin: true, H: s.handleWebhookEvents, Tag: "Webhooks", Summary: "Event types webhooks can subscribe to", Resp: []webhookEventInfo{}},
 		{Paged: true, Method: "GET", Path: "/webhooks", Admin: true, H: s.handleListWebhooks, Tag: "Webhooks", Summary: "List webhooks", Resp: []webhookRow{}},
@@ -1054,6 +1072,9 @@ var typeNames = map[string]string{
 	"apiDocsAdded": "DocumentsAdded", "apiDocReplaced": "DocumentReplaced", "apiDocUpdate": "DocumentChange", "apiRequestAnswer": "RequestAnswer",
 	"webhookRow": "Webhook", "webhookReq": "WebhookChange", "webhookCreated": "WebhookSecret", "webhookDelivery": "WebhookDelivery",
 	"webhookEventInfo": "WebhookEventType", "webhookEvent": "WebhookEvent",
+	"catalogFamily": "CatalogFamily", "catalogImportReq": "CatalogImport", "catalogImportResult": "CatalogImportResult",
+	"lookupResponse": "Lookup", "libraryMatch": "LibraryMatch", "identifyResponse": "Identification",
+	"identifyServiceResult": "IdentificationResult", "identifyMatch": "IdentificationMatch",
 }
 
 func (g *schemaGen) schema(t reflect.Type) map[string]any {

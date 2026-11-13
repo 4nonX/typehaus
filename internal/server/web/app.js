@@ -72,17 +72,19 @@ const S = {
 
 const ROUTES = {
   library: { title: 'Library', render: renderLibrary },
+  find: { title: 'Find fonts', render: renderFind },
   devices: { title: 'Devices', render: renderDevices },
   collections: { title: 'Collections', render: renderCollections, admin: true },
   people: { title: 'People', render: renderPeople, admin: true },
   licenses: { title: 'Licenses', render: renderLicenses, admin: true },
   requests: { title: 'Requests', render: renderRequests, admin: true },
   activity: { title: 'Activity', render: renderActivity, admin: true },
-  api: { title: 'API', render: renderAPI, admin: true },
+  integrations: { title: 'Integrations', render: renderIntegrations, admin: true },
 };
 
 function route() {
-  const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'library';
+  let r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'library';
+  if (r === 'api') r = 'integrations';
   return ROUTES[r] ? r : 'library';
 }
 window.addEventListener('hashchange', () => render());
@@ -352,6 +354,8 @@ const matchesQuery = (f, q) => `${f.family} ${f.full_name} ${f.postscript_name} 
 
 async function renderLibrary(page) {
   const L = S.lib;
+  const hq = new URLSearchParams(location.hash.split('?')[1] || '').get('q');
+  if (hq !== null) { L.q = hq; L.coll = 'all'; history.replaceState(null, '', '#/library'); }
   if (!L.loaded) {
     page.innerHTML = '<div class="empty">Loading library…</div>';
     await loadLibrary();
@@ -370,6 +374,8 @@ async function renderLibrary(page) {
         ${L.collections.map((c) => `<a href="#" data-coll="${c.id}" class="${String(L.coll) === String(c.id) ? 'active' : ''}">${esc(c.name)} <span class="n">${famCount(inCollection(c.id))}</span></a>`).join('') || '<p class="muted small" style="padding:0 10px">None yet</p>'}
         ${isAdmin ? '<p style="padding:0 10px"><a href="#/collections" class="small" style="padding:0">Manage collections →</a></p>' : ''}
         <h4>Missing a font?</h4>
+        <a href="#/find">Find free fonts</a>
+        <a href="#/find?tab=identify">Identify a font from an image</a>
         <a href="#" id="reqfont">Request a font${myAnswers().length ? ` <span class="n"><span class="badge on">${myAnswers().length} new answer${myAnswers().length > 1 ? 's' : ''}</span></span>` : ''}</a>
       </aside>
       <section>
@@ -1852,11 +1858,70 @@ async function licenseDetail(id, done) {
 // ---------------------------------------------------------------------------
 // API tokens (admin)
 // ---------------------------------------------------------------------------
+const INTEGRATION_TABS = { tokens: 'API tokens', services: 'Services' };
+async function renderIntegrations(page) {
+  let tab = new URLSearchParams(location.hash.split('?')[1] || '').get('tab');
+  if (!INTEGRATION_TABS[tab]) tab = 'tokens';
+  page.innerHTML = `<h1>Integrations</h1>
+    <p class="sub">Connect other tools through the API, and the outside services typehaus uses.</p>
+    <div class="tabs">${Object.entries(INTEGRATION_TABS).map(([k, v]) => `<button data-tab="${k}" class="${k === tab ? 'active' : ''}">${v}</button>`).join('')}</div>
+    <div id="intbox"></div>`;
+  $$('.tabs button', page).forEach((b) => b.onclick = () => { location.hash = `#/integrations?tab=${b.dataset.tab}`; });
+  const box = $('#intbox', page);
+  if (tab === 'services') await renderServices(box);
+  else await renderAPI(box);
+}
+
+async function renderServices(box) {
+  const svcs = await api('GET', '/api/services');
+  box.innerHTML = `<p class="small muted">Font identification sends an image to these services and matches the answers against your library and the free catalog.
+      Enter a key for each service you want to use – they are asked together. Keys are kept on this server and never shown again;
+      a key set through an environment variable (e.g. <code>TYPEHAUS_WHATFONTIS_KEY</code>) takes precedence and can only be changed there.</p>
+    ${svcs.some((x) => !x.enabled) ? '<div class="alert">Identification is switched off on this server (TYPEHAUS_IDENTIFY=false); keys entered here are kept but not used.</div>' : ''}
+    <div class="grid2">${svcs.map((x) => `<form class="card svc" data-svc="${esc(x.id)}">
+      <div class="row"><h3 style="margin:0">${esc(x.name)}</h3>${x.configured ? '<span class="badge open">ready</span>' : '<span class="badge">no key</span>'}
+        <span class="spacer"></span>${x.signup ? `<a class="small" href="${esc(x.signup)}" target="_blank" rel="noopener noreferrer">Get a key ↗</a>` : ''}</div>
+      <p class="small">${esc(x.about)}</p>
+      ${x.privacy ? `<p class="small muted">${esc(x.privacy)}</p>` : ''}
+      ${x.fields.map((f) => `<label class="field">${esc(f.label)}
+        ${f.from_env ? `<input type="text" disabled value="set by ${esc(f.env)}${f.hint ? ` (${esc(f.hint)})` : ''}">`
+          : `<input type="${f.secret ? 'password' : 'text'}" name="${esc(f.name)}" autocomplete="off" spellcheck="false" maxlength="500"
+            placeholder="${f.set ? (f.secret ? `saved${f.hint ? ` (${esc(f.hint)})` : ''} – type to replace` : '') : 'not set'}" value="${!f.secret && f.hint ? esc(f.hint) : ''}">`}</label>`).join('')}
+      <div class="row">${x.fields.every((f) => f.from_env) ? '' : `<button class="btn sm primary">Save</button>
+        ${x.fields.some((f) => f.set && !f.from_env) ? '<button type="button" class="btn sm danger" data-clear>Remove key</button>' : ''}`}</div>
+    </form>`).join('')}</div>`;
+  const refresh = () => renderServices(box).catch(fail);
+  $$('form.svc', box).forEach((form) => {
+    const id = form.dataset.svc;
+    const x = svcs.find((v) => v.id === id);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const body = {};
+      for (const f of x.fields) {
+        const inp = form.elements[f.name];
+        if (!inp) continue;
+        const v = inp.value.trim();
+        if (f.secret && !v) continue; // keep the saved secret
+        body[f.name] = v;
+      }
+      if (!Object.keys(body).length) { toast('Nothing to save'); return; }
+      try { await api('PUT', `/api/services/${id}`, body); toast(`${x.name} saved`); refresh(); } catch (err) { fail(err); }
+    };
+    const clr = $('[data-clear]', form);
+    if (clr) clr.onclick = () => confirmDialog(`Remove ${x.name} key`, `Identification stops asking ${esc(x.name)}.`, async () => {
+      const body = {};
+      x.fields.filter((f) => !f.from_env).forEach((f) => { body[f.name] = ''; });
+      await api('PUT', `/api/services/${id}`, body);
+      toast('Key removed'); refresh();
+    }, 'Remove');
+  });
+}
+
 async function renderAPI(page) {
   const toks = await api('GET', '/api/tokens');
   const base = location.origin;
   page.innerHTML = `
-    <div class="row"><div><h1>API</h1><p class="sub">Connect other tools – ticket systems, document servers, brand portals, scripts – through the typehaus API.</p></div>
+    <div class="row"><p class="sub" style="margin:0">Connect other tools – ticket systems, document servers, brand portals, scripts – through the typehaus API.</p>
       <span class="spacer"></span>
       <a class="btn" href="/api/v1/openapi.json" target="_blank" rel="noopener" title="OpenAPI 3.1 description of every endpoint">API description</a>
       <button class="btn primary" id="newtok">New token</button></div>
@@ -1913,6 +1978,312 @@ function showToken(name, tok) {
       toast('Press Ctrl+C to copy');
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// find fonts: the free catalog and font identification
+// ---------------------------------------------------------------------------
+const CAT_SOURCES = { google: 'Google Fonts', fontsquirrel: 'Font Squirrel', fontsource: 'Fontsource' };
+const CAT_CATEGORIES = { 'sans-serif': 'Sans serif', serif: 'Serif', display: 'Display', handwriting: 'Handwriting', monospace: 'Monospace' };
+const catFaces = new Map();
+function loadCatalogFace(id) {
+  if (!catFaces.has(id)) {
+    const fam = `thc${catFaces.size}`;
+    const ff = new FontFace(fam, `url(/api/catalog/preview/${encodeURIComponent(id)})`);
+    catFaces.set(id, ff.load().then((f) => { document.fonts.add(f); return fam; }).catch(() => null));
+  }
+  return catFaces.get(id);
+}
+// Font Squirrel previews are images Font Squirrel only hands out slowly, so
+// they load one after the other (and never hold up the rest of the page).
+const imgQueue = [];
+let imgBusy = false;
+function queueImagePreview(el) { imgQueue.push(el); pumpImages(); }
+function pumpImages() {
+  if (imgBusy) return;
+  const el = imgQueue.shift();
+  if (!el) return;
+  if (!document.body.contains(el)) { pumpImages(); return; }
+  imgBusy = true;
+  const img = new Image();
+  img.alt = '';
+  const next = () => { imgBusy = false; pumpImages(); };
+  img.onload = () => { el.classList.remove('loading'); el.textContent = ''; el.append(img); next(); };
+  img.onerror = () => { el.classList.remove('loading'); el.classList.add('nopreview'); el.textContent = 'No preview'; next(); };
+  img.src = `/api/catalog/preview/${encodeURIComponent(el.dataset.img)}`;
+}
+const catalogObserver = new IntersectionObserver((entries) => {
+  for (const en of entries) {
+    if (!en.isIntersecting) continue;
+    const el = en.target;
+    catalogObserver.unobserve(el);
+    if (el.dataset.img) { queueImagePreview(el); continue; }
+    const face = el.dataset.font ? loadFace(+el.dataset.font) : loadCatalogFace(el.dataset.cat);
+    face.then((fam) => {
+      el.classList.remove('loading');
+      if (fam) el.style.fontFamily = `"${fam}", "Adobe NotDef", sans-serif`;
+      else { el.classList.add('nopreview'); el.textContent = 'No preview'; }
+    });
+  }
+}, { rootMargin: '300px' });
+
+// specimenFor shows a name in its own font: from the library if typehaus
+// has it, else the catalog preview (an image for Font Squirrel).
+function specimenFor(text, lib, cat, cls = 'specimen') {
+  if (lib) return `<div class="${cls} loading" data-font="${lib.font_id}">${esc(text)}</div>`;
+  if (cat && cat.source === 'fontsquirrel') return `<div class="${cls} loading catimg" data-img="${esc(cat.id)}">${esc(text)}</div>`;
+  if (cat && cat.source) return `<div class="${cls} loading" data-cat="${esc(cat.id)}">${esc(text)}</div>`;
+  return `<div class="${cls} plain">${esc(text)}</div>`;
+}
+function observeSpecimens(box) { $$('[data-font].loading, [data-cat].loading, [data-img].loading', box).forEach((el) => catalogObserver.observe(el)); }
+
+async function renderFind(page) {
+  const tab = new URLSearchParams(location.hash.split('?')[1] || '').get('tab') === 'identify' ? 'identify' : 'catalog';
+  page.innerHTML = `<h1>Find fonts</h1>
+    <p class="sub">Search free fonts from Google Fonts and Font Squirrel${S.me.is_admin ? ' and add them to the library' : ''}, or find out which font an image uses.</p>
+    <div class="tabs"><button data-tab="catalog">Free fonts</button><button data-tab="identify">Identify a font</button></div>
+    <div id="findbox"></div>`;
+  $$('.tabs button', page).forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+    b.onclick = () => { location.hash = `#/find${b.dataset.tab === 'identify' ? '?tab=identify' : ''}`; };
+  });
+  const box = $('#findbox', page);
+  if (tab === 'identify') await renderIdentify(box);
+  else await renderCatalog(box);
+}
+
+const CAT = { q: '', category: '', source: '', text: '', shown: 40, selected: new Set() };
+async function renderCatalog(box) {
+  box.innerHTML = `<div class="toolbar">
+      <input type="search" id="cq" placeholder="Search families or foundries" value="${esc(CAT.q)}">
+      <select id="ccat"><option value="">All styles</option>${Object.entries(CAT_CATEGORIES).map(([k, v]) => `<option value="${k}" ${CAT.category === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <select id="csrc"><option value="">All sources</option>${Object.entries(CAT_SOURCES).map(([k, v]) => `<option value="${k}" ${CAT.source === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <input type="text" class="preview-text" id="ctext" placeholder="Type to preview" value="${esc(CAT.text)}">
+    </div>
+    <div id="cbulk"></div><div id="clist"><div class="more">Loading the catalog…</div></div>`;
+  let list = [];
+  const load = async () => {
+    const p = new URLSearchParams();
+    if (CAT.q) p.set('q', CAT.q);
+    if (CAT.category) p.set('category', CAT.category);
+    if (CAT.source) p.set('source', CAT.source);
+    try {
+      list = await api('GET', `/api/catalog?${p}`);
+    } catch (e) {
+      $('#clist', box).innerHTML = e.status === 404
+        ? '<div class="empty"><div class="big">The free catalog is switched off.</div>This server runs without it (TYPEHAUS_CATALOG=false), e.g. because it has no internet access.</div>'
+        : `<div class="empty"><div class="big">The catalog can't be reached.</div>${esc(e.message)}</div>`;
+      return;
+    }
+    draw();
+  };
+  const draw = () => {
+    const el = $('#clist', box);
+    if (!list.length) { el.innerHTML = '<div class="empty"><div class="big">Nothing found.</div>Try fewer words, or another style or source.</div>'; drawBulk(); return; }
+    const shown = list.slice(0, CAT.shown);
+    el.innerHTML = `<p class="small muted">${plural(list.length, 'family', 'families')}</p>` + shown.map((f) => {
+      const sel = S.me.is_admin && f.importable && !f.in_library;
+      return `<div class="cfam">
+        <div class="family-head">
+          ${sel ? `<input type="checkbox" data-sel="${esc(f.id)}" ${CAT.selected.has(f.id) ? 'checked' : ''} aria-label="Select ${esc(f.family)}">` : '<span class="cbspace"></span>'}
+          <span class="name">${esc(f.family)}</span>
+          <span class="meta">${esc(CAT_SOURCES[f.source] || f.source)}${f.foundry ? ` · ${esc(f.foundry)}` : ''} · ${esc(CAT_CATEGORIES[f.category] || f.category)}${f.styles ? ` · ${plural(f.styles, 'style')}` : ''}${f.variable ? ' · variable' : ''}</span>
+          <span class="badge">${esc(f.license)}</span>
+          ${f.in_library ? '<span class="badge open">in library</span>' : ''}
+          <span class="spacer"></span>
+          <a class="btn sm ghost" href="${esc(f.page)}" target="_blank" rel="noopener noreferrer">${esc(CAT_SOURCES[f.source] || 'Source')} ↗</a>
+          ${S.me.is_admin && f.importable && !f.in_library ? `<button class="btn sm" data-import="${esc(f.id)}">Add to library</button>` : ''}
+          ${!S.me.is_admin && f.importable && !f.in_library ? `<button class="btn sm" data-ask="${esc(f.family)}">Request</button>` : ''}
+        </div>
+        ${specimenFor(CAT.text || f.family, null, f, 'specimen cspec')}
+        ${f.reason ? `<p class="small muted cnote">${esc(f.reason)}</p>` : ''}
+      </div>`;
+    }).join('') + (list.length > CAT.shown ? '<div class="more"><button class="btn" id="cmore">Show more</button></div>' : '');
+    observeSpecimens(el);
+    $$('[data-sel]', el).forEach((c) => c.onchange = () => { c.checked ? CAT.selected.add(c.dataset.sel) : CAT.selected.delete(c.dataset.sel); drawBulk(); });
+    $$('[data-import]', el).forEach((b) => b.onclick = () => importCatalog([b.dataset.import], list, load));
+    $$('[data-ask]', el).forEach((b) => b.onclick = () => requestFont(`${b.dataset.ask} (free, ${location.origin}/#/find)`));
+    const more = $('#cmore', el);
+    if (more) more.onclick = () => { CAT.shown += 60; draw(); };
+    drawBulk();
+  };
+  const drawBulk = () => {
+    const b = $('#cbulk', box);
+    if (!CAT.selected.size) { b.innerHTML = ''; return; }
+    b.innerHTML = `<div class="bulk"><b>${plural(CAT.selected.size, 'family', 'families')} selected</b>
+      <button class="btn sm primary" id="cimp">Add to library</button><button class="btn sm ghost" id="cclear">Clear</button></div>`;
+    $('#cimp', b).onclick = () => importCatalog([...CAT.selected], list, () => { CAT.selected.clear(); return load(); });
+    $('#cclear', b).onclick = () => { CAT.selected.clear(); draw(); };
+  };
+  let t;
+  $('#cq', box).oninput = (e) => { clearTimeout(t); t = setTimeout(() => { CAT.q = e.target.value.trim(); CAT.shown = 40; load(); }, 250); };
+  escClears($('#cq', box), () => { CAT.q = ''; load(); });
+  $('#ccat', box).onchange = (e) => { CAT.category = e.target.value; CAT.shown = 40; load(); };
+  $('#csrc', box).onchange = (e) => { CAT.source = e.target.value; CAT.shown = 40; load(); };
+  // keep the specimen text in step with its family when typing
+  $('#ctext', box).oninput = (e) => {
+    CAT.text = e.target.value;
+    $$('.cfam', box).forEach((row, i) => { const s = $('.cspec', row); if (s && !s.classList.contains('catimg')) s.textContent = CAT.text || list[i]?.family || ''; });
+  };
+  await load();
+}
+
+// importCatalog adds catalog families to the library after asking for a
+// collection, and reports what came of each.
+function importCatalog(ids, list, done) {
+  const names = ids.map((id) => list.find((f) => f.id === id)?.family || id);
+  const cols = S.lib.collections || [];
+  dialog(ids.length === 1 ? `Add ${names[0]}` : `Add ${plural(ids.length, 'family', 'families')}`, `
+    <p>${ids.length === 1 ? `<b>${esc(names[0])}</b> is` : `${names.map((n) => `<b>${esc(n)}</b>`).join(', ')} are`} downloaded complete from ${ids.some((i) => i.startsWith('google:')) ? 'Google Fonts' : ''}${ids.some((i) => i.startsWith('google:')) && ids.some((i) => i.startsWith('fontsquirrel:')) ? ' and ' : ''}${ids.some((i) => i.startsWith('fontsquirrel:')) ? 'Font Squirrel' : ''} and added like an upload.</p>
+    <p class="small muted">Open licenses (SIL OFL, Apache, Ubuntu) are assigned automatically. A Font Squirrel freeware license becomes a license with its text attached – check what it allows and tick the rights.</p>
+    ${cols.length ? `<label class="field">Also add to collection<select name="collection"><option value="">No collection</option>${cols.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>` : ''}`,
+  { submit: 'Add to library', onSubmit: async (fd) => {
+    toast(`Downloading ${plural(ids.length, 'family', 'families')}…`);
+    const res = await api('POST', '/api/catalog/import', { ids, collection_id: +(fd.get('collection') || 0) });
+    S.lib.loaded = false;
+    const ok = res.filter((r) => r.status === 'added');
+    const bad = res.filter((r) => r.status === 'error');
+    if (bad.length) {
+      dialog('Not everything was added', `<ul>${res.map((r) => `<li><b>${esc(r.family || r.id)}</b>: ${r.status === 'added' ? `added ${plural(r.added, 'style')}` : r.status === 'exists' ? 'already in the library' : esc(r.message)}</li>`).join('')}</ul>`,
+        { submit: 'OK', cancel: false, onSubmit: async () => {} });
+    } else if (ok.length) {
+      toast(ok.map((r) => `${r.family}: ${plural(r.added, 'style')}${r.licenses.length ? ` · ${r.licenses.join(', ')}` : ''}`).join(' · '));
+    } else toast('Already in the library');
+    await done();
+  } });
+}
+
+let identifyImage = null; // { blob, url } of the image to identify
+async function renderIdentify(box) {
+  const info = await api('GET', '/api/identify');
+  const ready = info.enabled && info.services.length > 0;
+  const names = { whatfontis: 'WhatFontIs', mixfont: 'Mixfont Lens', aspose: 'Aspose' };
+  box.innerHTML = `
+    <div class="idgrid">
+      <div>
+        ${!info.enabled ? '<div class="alert">Identification by image is switched off on this server (TYPEHAUS_IDENTIFY=false). The sites below still work.</div>'
+          : !ready ? `<div class="alert warnbox">No identification service is set up yet. ${S.me.is_admin ? 'Add an API key under <a href="#/integrations?tab=services">Integrations → Services</a> – WhatFontIs is free for 200 lookups a day.' : 'Ask an administrator to add one. Meanwhile, use one of the sites below and look the name up here.'}</div>` : ''}
+        ${info.enabled ? `<div class="drop iddrop ${ready ? '' : 'off'}" id="iddrop" tabindex="0">
+          <div id="idpreview">${identifyImage ? `<img src="${identifyImage.url}" alt="Image to identify">` : '<b>Drop, paste or choose an image</b><span class="small muted">A screenshot or photo of the lettering – one line of text works best.</span>'}</div>
+          <input type="file" id="idfile" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" hidden>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="url" id="idurl" placeholder="…or paste a link to an image" style="flex:1">
+          <label class="row small"><input type="checkbox" id="idfree"> Free fonts only</label>
+          <button class="btn primary" id="idgo" ${ready ? '' : 'disabled'}>Identify</button>
+        </div>
+        <p class="small muted">${ready ? `Asks ${info.services.map((s) => names[s] || s).join(', ')}. The image is sent to ${info.services.length === 1 ? 'that service' : 'those services'}; typehaus doesn't keep it.` : ''}</p>` : ''}
+        <div id="idres"></div>
+      </div>
+      <aside class="card idside">
+        <h3>Other identifiers</h3>
+        <p class="small muted">These have no API: open one, upload the image there, then look the name up here.</p>
+        <ul class="idlinks">${info.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.name)} ↗</a><span class="small muted">${esc(l.about)}</span></li>`).join('')}</ul>
+        <form id="lkform" class="row"><input type="search" id="lkname" placeholder="Font name, e.g. Futura PT Book" required style="flex:1"><button class="btn">Look up</button></form>
+        <div id="lkres"></div>
+      </aside>
+    </div>`;
+  $('#lkform', box).onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $('#lkname', box).value.trim();
+    if (!name) return;
+    try {
+      const r = await api('GET', `/api/lookup?name=${encodeURIComponent(name)}`);
+      const out = $('#lkres', box);
+      out.innerHTML = `${r.library.length ? `<h4>In your library</h4>${r.library.map((m) => libMatchHTML(m)).join('')}` : `<p class="small"><b>${esc(name)}</b> isn't in your library.</p>`}
+        ${(() => {
+          const have = new Set(r.library.map((m) => m.family.toLowerCase()));
+          const cat = r.catalog.filter((c) => !have.has(c.family.toLowerCase()));
+          return cat.length ? `<h4>Free catalog</h4>${cat.map((c) => catMatchHTML(c)).join('')}` : '';
+        })()}
+        ${!r.library.length ? `<p><button type="button" class="btn sm" data-ask="${esc(name)}">${S.me.is_admin ? 'Note it as a request' : 'Request it'}</button></p>` : ''}`;
+      wireMatches(out);
+      observeSpecimens(out);
+    } catch (err) { fail(err); }
+  };
+  if (!info.enabled) return;
+  const setImage = (file) => {
+    if (!file || !/^image\//.test(file.type)) { toast('That is not an image', true); return; }
+    if (file.size > 10 << 20) { toast('The image is larger than 10 MB', true); return; }
+    if (identifyImage) URL.revokeObjectURL(identifyImage.url);
+    identifyImage = { blob: file, url: URL.createObjectURL(file) };
+    $('#idpreview', box).innerHTML = `<img src="${identifyImage.url}" alt="Image to identify">`;
+    $('#idurl', box).value = '';
+  };
+  const drop = $('#iddrop', box);
+  drop.onclick = () => $('#idfile', box).click();
+  drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#idfile', box).click(); } };
+  $('#idfile', box).onchange = (e) => setImage(e.target.files[0]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); setImage(e.dataTransfer.files[0]); };
+  // paste anywhere on the page while it is open
+  const onPaste = (e) => {
+    if (!document.body.contains(drop)) { document.removeEventListener('paste', onPaste); return; }
+    const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
+    if (f) { e.preventDefault(); setImage(f); }
+  };
+  document.addEventListener('paste', onPaste);
+  $('#idgo', box).onclick = async () => {
+    const link = $('#idurl', box).value.trim();
+    if (!identifyImage && !link) { toast('Choose an image first', true); return; }
+    const fd = new FormData();
+    if (link) fd.append('url', link); else fd.append('image', identifyImage.blob, identifyImage.blob.name || 'image.png');
+    if ($('#idfree', box).checked) fd.append('free_only', '1');
+    const btn = $('#idgo', box);
+    btn.disabled = true; btn.textContent = 'Identifying…';
+    $('#idres', box).innerHTML = '<div class="more">Asking the identification services – this can take up to a minute.</div>';
+    try {
+      const r = await api('POST', '/api/identify', fd);
+      drawIdentify($('#idres', box), r.results);
+    } catch (e) { $('#idres', box).innerHTML = ''; fail(e); } finally { btn.disabled = false; btn.textContent = 'Identify'; }
+  };
+}
+
+function libMatchHTML(m) {
+  return `<div class="idm"><div class="idm-head"><b>${esc(m.family)}</b> <span class="badge open">in your library</span>
+    <span class="small muted">${plural(m.styles, 'style')}${m.license ? ` · ${esc(m.license)}` : ' · no license assigned'}</span>
+    <span class="spacer"></span><a class="btn sm ghost" href="#/library?q=${encodeURIComponent(m.family)}">Open</a></div>
+    ${specimenFor(m.family, m, null, 'specimen idspec')}</div>`;
+}
+function catMatchHTML(c) {
+  return `<div class="idm"><div class="idm-head"><b>${esc(c.family)}</b> <span class="badge">${esc(c.license)}</span>
+    <span class="small muted">${esc(CAT_SOURCES[c.source] || c.source)}</span>${c.in_library ? ' <span class="badge open">in library</span>' : ''}
+    <span class="spacer"></span><a class="btn sm ghost" href="${esc(c.page)}" target="_blank" rel="noopener noreferrer">↗</a>
+    ${c.importable && !c.in_library ? (S.me.is_admin ? `<button type="button" class="btn sm" data-import="${esc(c.id)}" data-fam="${esc(c.family)}">Add to library</button>`
+      : `<button type="button" class="btn sm" data-ask="${esc(c.family)}">Request</button>`) : ''}</div>
+    ${specimenFor(c.family, null, c, 'specimen idspec')}</div>`;
+}
+function wireMatches(el, after = () => {}) {
+  $$('[data-import]', el).forEach((b) => b.onclick = () => importCatalog([b.dataset.import], [{ id: b.dataset.import, family: b.dataset.fam }], async () => { b.replaceWith(Object.assign(document.createElement('span'), { className: 'badge open', textContent: 'in library' })); after(); }));
+  $$('[data-ask]', el).forEach((b) => b.onclick = () => requestFont(b.dataset.ask));
+}
+
+function drawIdentify(el, results) {
+  el.innerHTML = results.map((r) => {
+    const head = `<div class="row"><h3 style="margin:0">${esc(r.name)}</h3>
+      ${r.status === 'ok' ? `<span class="small muted">${plural(r.matches.length, 'match', 'matches')}${r.word ? ` · read “${esc(r.word)}”` : ''}${r.style ? ` · ${esc(r.style)}` : ''}</span>`
+        : r.status === 'skipped' ? '<span class="badge">skipped</span>' : '<span class="badge warn">failed</span>'}</div>`;
+    if (r.status !== 'ok') return `<div class="card idcard">${head}<p class="small muted">${esc(r.message)}</p></div>`;
+    if (!r.matches.length) return `<div class="card idcard">${head}<p class="small muted">No match. Crop the image to a line of clear text and try again.</p></div>`;
+    return `<div class="card idcard">${head}${r.matches.map((m) => {
+      const lib = m.library; const cat = m.catalog;
+      let verdict;
+      if (lib) verdict = `<span class="badge open">in your library</span> <span class="small muted">${esc(lib.family)}${lib.license ? ` · ${esc(lib.license)}` : ''}</span>`;
+      else if (cat && cat.importable) verdict = `<span class="badge">free · ${esc(cat.license)}</span> <span class="small muted">${esc(CAT_SOURCES[cat.source])}</span>`;
+      else if (m.free === false) verdict = '<span class="badge warn">commercial</span>';
+      else if (m.free) verdict = '<span class="badge">free</span>';
+      else verdict = '';
+      const act = lib ? `<a class="btn sm ghost" href="#/library?q=${encodeURIComponent(lib.family)}">Open</a>`
+        : cat && cat.importable && !cat.in_library ? (S.me.is_admin ? `<button type="button" class="btn sm" data-import="${esc(cat.id)}" data-fam="${esc(cat.family)}">Add to library</button>` : `<button type="button" class="btn sm" data-ask="${esc(cat.family)}">Request</button>`)
+          : `<button type="button" class="btn sm" data-ask="${esc(m.name)}">${S.me.is_admin ? 'Note as request' : 'Request'}</button>`;
+      return `<div class="idm"><div class="idm-head"><b>${esc(m.name)}</b>${m.score ? ` <span class="small muted">${Math.round(m.score * 100)} %</span>` : ''} ${verdict}
+        <span class="spacer"></span>${m.url ? `<a class="btn sm ghost" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">${esc(r.name)} ↗</a>` : ''}${act}</div>
+        ${lib || cat ? specimenFor(m.name, lib, cat, 'specimen idspec') : ''}</div>`;
+    }).join('')}</div>`;
+  }).join('');
+  wireMatches(el);
+  observeSpecimens(el);
 }
 
 // ---------------------------------------------------------------------------
