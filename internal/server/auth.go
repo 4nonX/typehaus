@@ -36,6 +36,7 @@ func (s *Server) sessionUser(r *http.Request) *authUser {
 		return nil
 	}
 	u.HasPassword = pw.Valid && pw.String != ""
+	u.IP = s.clientIP(r)
 	return u
 }
 
@@ -101,7 +102,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.internalErr(w, err)
 		return
 	}
-	s.audit(&authUser{ID: id, Username: req.Username}, "login", "local login from %s", ip)
+	s.audit(&authUser{ID: id, Username: req.Username, IP: ip}, "login", "local login from %s", ip)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

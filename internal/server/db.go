@@ -286,6 +286,31 @@ CREATE TABLE api_tokens (
 	last_ip      TEXT NOT NULL DEFAULT ''
 );
 `,
+	// 19: the activity log records where a change came from: the caller's IP
+	// and, for API calls, the token (names can repeat, ids can't)
+	`ALTER TABLE audit ADD COLUMN ip TEXT NOT NULL DEFAULT '';
+ALTER TABLE audit ADD COLUMN token_id INTEGER;`,
+	// 20: token rotation – the previous secret keeps working until prev_until
+	`ALTER TABLE api_tokens ADD COLUMN prev_hash TEXT;
+ALTER TABLE api_tokens ADD COLUMN prev_until INTEGER;
+ALTER TABLE api_tokens ADD COLUMN rotated_at INTEGER;
+CREATE INDEX api_tokens_prev ON api_tokens(prev_hash);`,
+	// 21: Idempotency-Key: the response of a write request, replayed when an
+	// integration retries it (kept 24 hours)
+	`
+CREATE TABLE api_idempotency (
+	principal    TEXT NOT NULL,
+	key          TEXT NOT NULL,
+	method       TEXT NOT NULL,
+	path         TEXT NOT NULL,
+	body_hash    TEXT NOT NULL,
+	status       INTEGER NOT NULL DEFAULT 0,
+	content_type TEXT NOT NULL DEFAULT '',
+	response     BLOB,
+	created_at   INTEGER NOT NULL,
+	PRIMARY KEY (principal, key)
+);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

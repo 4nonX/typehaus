@@ -876,7 +876,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request, u *authU
 		}
 	}
 	if len(ids) == 0 {
-		writeErr(w, 409, "Can't activate: "+strings.Join(refused, "; ")+". Ask an administrator.")
+		writeErrCode(w, 409, "license_refused", "Can't activate: "+strings.Join(refused, "; ")+". Ask an administrator.")
 		return
 	}
 	where, vargs := visibleClause(u)

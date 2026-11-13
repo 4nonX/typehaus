@@ -153,7 +153,7 @@ func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := res.LastInsertId()
-	s.audit(&authUser{ID: userID, Username: username}, "device.enroll", "%s (%s, %s)", name, req.Platform, req.Hostname)
+	s.audit(&authUser{ID: userID, Username: username, IP: s.clientIP(r)}, "device.enroll", "%s (%s, %s)", name, req.Platform, req.Hostname)
 	writeJSON(w, 201, protocol.EnrollResponse{DeviceID: id, Token: tok, User: username})
 }
 

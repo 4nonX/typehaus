@@ -59,6 +59,8 @@ type Config struct {
 	Downloads bool
 	// Inventory asks agents to report fonts installed outside typehaus.
 	Inventory bool
+	// APIRate is the requests per minute one API token may send (0 = no limit).
+	APIRate int
 }
 
 // ConfigFromEnv builds a Config from TYPEHAUS_* variables.
@@ -84,6 +86,7 @@ func ConfigFromEnv() Config {
 		AgentsDir:        env("TYPEHAUS_AGENTS_DIR", "./agents"),
 		Downloads:        envBool("TYPEHAUS_DOWNLOADS", true),
 		Inventory:        envBool("TYPEHAUS_INVENTORY", false),
+		APIRate:          envInt("TYPEHAUS_API_RATE", 600),
 	}
 	c.SecureCookies = envBool("TYPEHAUS_SECURE_COOKIES", strings.HasPrefix(c.BaseURL, "https://"))
 	if c.PollSeconds < 10 {
@@ -187,6 +190,7 @@ func (s *Server) janitor(ctx context.Context) {
 		s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, n)
 		s.db.Exec(`DELETE FROM enroll_codes WHERE expires_at < ?`, n)
 		s.recordUsage()
+		s.db.Exec(`DELETE FROM api_idempotency WHERE created_at < ?`, n-24*3600)
 		// devices that stopped reporting (scan switched off, agent gone)
 		s.db.Exec(`DELETE FROM device_inventory WHERE device_id IN (SELECT id FROM devices WHERE inventory_at < ?)`, n-30*86400)
 		tmp := filepath.Join(s.cfg.DataDir, "tmp")
@@ -302,6 +306,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/tokens", s.noTokens(s.admin(s.handleListTokens)))
 	mux.Handle("POST /api/tokens", s.noTokens(s.admin(s.handleCreateToken)))
 	mux.Handle("DELETE /api/tokens/{id}", s.noTokens(s.admin(s.handleDeleteToken)))
+	mux.Handle("PATCH /api/tokens/{id}", s.noTokens(s.admin(s.handleUpdateToken)))
+	mux.Handle("POST /api/tokens/{id}/rotate", s.noTokens(s.admin(s.handleRotateToken)))
 	s.registerV1(mux)
 
 	// agent binaries (public: open-source, needed before a device can authenticate)
@@ -349,7 +355,7 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 			tokenCall := strings.HasPrefix(r.URL.Path, "/api/v1/") && bearer(r) != ""
 			if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/agent/") && !tokenCall &&
 				r.Header.Get("X-Typehaus") != "1" {
-				writeErr(w, http.StatusForbidden, "missing X-Typehaus header")
+				writeErrCode(w, http.StatusForbidden, "csrf_header_missing", "missing X-Typehaus header")
 				return
 			}
 		}
@@ -373,6 +379,7 @@ type authUser struct {
 	// Token is set when an API token made the request (ID is then the
 	// administrator who created it).
 	Token *apiToken
+	IP    string // the caller, for the activity log
 }
 
 type authDevice struct {
@@ -398,7 +405,7 @@ func (s *Server) user(h func(http.ResponseWriter, *http.Request, *authUser)) htt
 func (s *Server) admin(h func(http.ResponseWriter, *http.Request, *authUser)) http.Handler {
 	return s.user(func(w http.ResponseWriter, r *http.Request, u *authUser) {
 		if !u.IsAdmin {
-			writeErr(w, http.StatusForbidden, "admin only")
+			writeErrCode(w, http.StatusForbidden, "admin_only", "admin only")
 			return
 		}
 		h(w, r, u)
@@ -445,13 +452,16 @@ func (s *Server) device(h func(http.ResponseWriter, *http.Request, *authDevice))
 // ---- helpers -------------------------------------------------------------
 
 func (s *Server) audit(u *authUser, action, format string, args ...any) {
-	var uid any
-	actor := "system"
+	var uid, tid any
+	actor, ip := "system", ""
 	if u != nil {
-		uid, actor = u.ID, u.Username
+		uid, actor, ip = u.ID, u.Username, u.IP
+		if u.Token != nil {
+			tid = u.Token.ID
+		}
 	}
-	s.db.Exec(`INSERT INTO audit (ts, user_id, actor, action, detail) VALUES (?, ?, ?, ?, ?)`,
-		now(), uid, actor, action, fmt.Sprintf(format, args...))
+	s.db.Exec(`INSERT INTO audit (ts, user_id, actor, action, detail, ip, token_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		now(), uid, actor, action, fmt.Sprintf(format, args...), ip, tid)
 }
 
 func (s *Server) clientIP(r *http.Request) string {
@@ -478,8 +488,74 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// apiErrorBody is every error response: a message for people and a stable
+// code for programs (see errorCodes).
+type apiErrorBody struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+}
+
+// errorCodes are the machine-readable error codes. Part of the API contract:
+// codes are only ever added.
+var errorCodes = map[string]string{
+	"invalid_request":         "The request is malformed or a value is invalid.",
+	"unauthorized":            "Not signed in and no API token sent.",
+	"token_invalid":           "The API token is unknown or was revoked.",
+	"token_expired":           "The API token has expired.",
+	"token_owner_inactive":    "The administrator who created the token is disabled or no longer an administrator.",
+	"forbidden":               "Not allowed.",
+	"admin_only":              "Only administrators may do this.",
+	"read_only_token":         "The API token may only read.",
+	"tokens_not_allowed":      "API tokens can't be used for this endpoint.",
+	"csrf_header_missing":     "Browser requests must send the X-Typehaus header.",
+	"not_found":               "The object doesn't exist (or isn't visible to the caller).",
+	"conflict":                "The change conflicts with the current state.",
+	"already_exists":          "An object with this name already exists.",
+	"seats_exhausted":         "An enforced license has no free seats for this.",
+	"license_refused":         "A license doesn't allow this (e.g. downloading, expired).",
+	"downloads_disabled":      "Direct downloads are switched off on this server.",
+	"feature_disabled":        "The feature is switched off on this server.",
+	"limit_reached":           "A limit was reached (e.g. open font requests).",
+	"payload_too_large":       "The upload is too large.",
+	"idempotency_key_reused":  "The Idempotency-Key was already used for a different request.",
+	"idempotency_in_progress": "A request with this Idempotency-Key is still being processed.",
+	"rate_limited":            "Too many requests – wait for Retry-After seconds.",
+	"internal_error":          "Something went wrong on the server.",
+}
+
+func defaultCode(status int) string {
+	switch status {
+	case 400, 422:
+		return "invalid_request"
+	case 401:
+		return "unauthorized"
+	case 403:
+		return "forbidden"
+	case 404:
+		return "not_found"
+	case 409:
+		return "conflict"
+	case 413:
+		return "payload_too_large"
+	case 429:
+		return "rate_limited"
+	}
+	return "internal_error"
+}
+
+// exists reports whether a row with this id exists (table is a constant).
+func (s *Server) exists(table string, id int64) bool {
+	var ok bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM `+table+` WHERE id = ?)`, id).Scan(&ok)
+	return ok
+}
+
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeErrCode(w, status, defaultCode(status), msg)
+}
+
+func writeErrCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, apiErrorBody{Error: msg, Code: code})
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

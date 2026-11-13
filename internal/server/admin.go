@@ -104,7 +104,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, u *aut
 	res, err := s.db.Exec(`INSERT INTO users (username, display_name, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		str(req.Username), str(req.DisplayName), str(req.Email), hash, boolInt(req.IsAdmin != nil && *req.IsAdmin), now())
 	if err != nil {
-		writeErr(w, 409, "username already exists")
+		writeErrCode(w, 409, "already_exists", "username already exists")
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -158,6 +158,10 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *aut
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("users", id) {
+		writeErr(w, 404, "user not found")
+		return
+	}
 	var req userReq
 	if !readJSON(w, r, &req) {
 		return
@@ -172,7 +176,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, u *aut
 			return
 		}
 		if _, err := s.db.Exec(`UPDATE users SET username = ? WHERE id = ?`, strings.TrimSpace(*req.Username), id); err != nil {
-			writeErr(w, 409, "username already exists")
+			writeErrCode(w, 409, "already_exists", "username already exists")
 			return
 		}
 	}
@@ -221,6 +225,10 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request, u *aut
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, 400, "bad id")
+		return
+	}
+	if !s.exists("users", id) {
+		writeErr(w, 404, "user not found")
 		return
 	}
 	if id == u.ID {
@@ -273,11 +281,13 @@ type usageRow struct {
 }
 
 type auditEntry struct {
-	ID     int64  `json:"id"`
-	TS     int64  `json:"ts"`
-	Actor  string `json:"actor"`
-	Action string `json:"action"`
-	Detail string `json:"detail"`
+	ID      int64  `json:"id"`
+	TS      int64  `json:"ts"`
+	Actor   string `json:"actor"` // username, token:<name>, or system
+	Action  string `json:"action"`
+	Detail  string `json:"detail"`
+	IP      string `json:"ip"`
+	TokenID *int64 `json:"token_id"` // set for changes made through an API token
 }
 
 type groupReq struct {
@@ -300,7 +310,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request, u *au
 	}
 	res, err := s.db.Exec(`INSERT INTO groups (name, description) VALUES (?, ?)`, strings.TrimSpace(*req.Name), desc)
 	if err != nil {
-		writeErr(w, 409, "group already exists")
+		writeErrCode(w, 409, "already_exists", "group already exists")
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -314,13 +324,17 @@ func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request, u *au
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("groups", id) {
+		writeErr(w, 404, "group not found")
+		return
+	}
 	var req groupReq
 	if !readJSON(w, r, &req) {
 		return
 	}
 	if req.Name != nil {
 		if _, err := s.db.Exec(`UPDATE groups SET name = ? WHERE id = ?`, strings.TrimSpace(*req.Name), id); err != nil {
-			writeErr(w, 409, "group already exists")
+			writeErrCode(w, 409, "already_exists", "group already exists")
 			return
 		}
 	}
@@ -335,6 +349,10 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, u *au
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, 400, "bad id")
+		return
+	}
+	if !s.exists("groups", id) {
+		writeErr(w, 404, "group not found")
 		return
 	}
 	var name string
@@ -393,7 +411,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *authUser
 		limit = 200
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	q := `SELECT id, ts, actor, action, detail FROM audit`
+	q := `SELECT id, ts, actor, action, detail, ip, token_id FROM audit`
 	var args []any
 	if before > 0 {
 		q += ` WHERE id < ?`
@@ -410,8 +428,14 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *authUser
 	out := []auditEntry{}
 	for rows.Next() {
 		var e auditEntry
-		rows.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail)
+		rows.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail, &e.IP, &e.TokenID)
 		out = append(out, e)
+	}
+	if len(out) == limit { // more to come: cursor to the older entries
+		v := r.URL.Query()
+		v.Set("before", strconv.FormatInt(out[len(out)-1].ID, 10))
+		v.Set("limit", strconv.Itoa(limit))
+		w.Header().Set("Link", "<"+r.URL.Path+"?"+v.Encode()+">; rel=\"next\"")
 	}
 	writeJSON(w, 200, out)
 }

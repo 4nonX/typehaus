@@ -97,7 +97,7 @@ func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request, 
 	res, err := s.db.Exec(`INSERT INTO collections (name, description, everyone, mode, created_at) VALUES (?, ?, ?, ?, ?)`,
 		strings.TrimSpace(*req.Name), desc, boolInt(everyone), mode, now())
 	if err != nil {
-		writeErr(w, 409, "a collection with that name already exists")
+		writeErrCode(w, 409, "already_exists", "a collection with that name already exists")
 		return
 	}
 	id, _ := res.LastInsertId()
@@ -146,7 +146,7 @@ func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request, 
 		next.GroupIDs = *req.GroupIDs
 	}
 	if msg := s.blockedBySeats(next, nil); msg != "" {
-		writeErr(w, 409, msg)
+		writeErrCode(w, 409, "seats_exhausted", msg)
 		return
 	}
 	if req.Name != nil {
@@ -155,7 +155,7 @@ func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		if _, err := s.db.Exec(`UPDATE collections SET name = ? WHERE id = ?`, strings.TrimSpace(*req.Name), id); err != nil {
-			writeErr(w, 409, "a collection with that name already exists")
+			writeErrCode(w, 409, "already_exists", "a collection with that name already exists")
 			return
 		}
 	}
@@ -184,6 +184,10 @@ func (s *Server) handleDeleteCollection(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("collections", id) {
+		writeErr(w, 404, "collection not found")
+		return
+	}
 	var name string
 	s.db.QueryRow(`SELECT name FROM collections WHERE id = ?`, id).Scan(&name)
 	s.db.Exec(`DELETE FROM collections WHERE id = ?`, id)
@@ -199,6 +203,10 @@ func (s *Server) handleCollectionAddFonts(w http.ResponseWriter, r *http.Request
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("collections", id) {
+		writeErr(w, 404, "collection not found")
+		return
+	}
 	var req struct {
 		FontIDs []int64 `json:"font_ids"`
 	}
@@ -207,7 +215,7 @@ func (s *Server) handleCollectionAddFonts(w http.ResponseWriter, r *http.Request
 	}
 	if cur, ok := s.collectionAudience(id); ok {
 		if msg := s.blockedBySeats(cur, req.FontIDs); msg != "" {
-			writeErr(w, 409, msg)
+			writeErrCode(w, 409, "seats_exhausted", msg)
 			return
 		}
 	}
@@ -224,6 +232,10 @@ func (s *Server) handleCollectionRemoveFonts(w http.ResponseWriter, r *http.Requ
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, 400, "bad id")
+		return
+	}
+	if !s.exists("collections", id) {
+		writeErr(w, 404, "collection not found")
 		return
 	}
 	var req struct {

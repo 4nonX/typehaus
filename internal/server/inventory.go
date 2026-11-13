@@ -21,7 +21,7 @@ const maxInventory = 20000
 
 func (s *Server) handleAgentInventory(w http.ResponseWriter, r *http.Request, d *authDevice) {
 	if !s.cfg.Inventory {
-		writeErr(w, http.StatusConflict, "the inventory scan is switched off on this server")
+		writeErrCode(w, http.StatusConflict, "feature_disabled", "the inventory scan is switched off on this server")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)

@@ -112,6 +112,10 @@ func (s *Server) handleLicenseHistory(w http.ResponseWriter, r *http.Request, u 
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("licenses", id) {
+		writeErr(w, 404, "license not found")
+		return
+	}
 	days := 365
 	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 && d <= 3650 {
 		days = d

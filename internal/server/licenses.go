@@ -555,6 +555,10 @@ func (s *Server) handleDeleteLicense(w http.ResponseWriter, r *http.Request, u *
 		writeErr(w, 400, "bad id")
 		return
 	}
+	if !s.exists("licenses", id) {
+		writeErr(w, 404, "license not found")
+		return
+	}
 	var name string
 	s.db.QueryRow(`SELECT name FROM licenses WHERE id = ?`, id).Scan(&name)
 	var shas []string

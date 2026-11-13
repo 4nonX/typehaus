@@ -100,7 +100,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		fail("bad claims", err)
 		return
 	}
-	uid, err := s.upsertOIDCUser(idt.Subject, claims)
+	uid, err := s.upsertOIDCUser(idt.Subject, claims, s.clientIP(r))
 	if err != nil {
 		fail(err.Error(), err)
 		return
@@ -137,7 +137,7 @@ func claimStrings(c map[string]any, key string) []string {
 	return nil
 }
 
-func (s *Server) upsertOIDCUser(sub string, claims map[string]any) (int64, error) {
+func (s *Server) upsertOIDCUser(sub string, claims map[string]any, ip string) (int64, error) {
 	username := claimString(claims, "preferred_username", "email", "sub")
 	display := claimString(claims, "name", "preferred_username")
 	email := claimString(claims, "email")
@@ -165,7 +165,7 @@ func (s *Server) upsertOIDCUser(sub string, claims map[string]any) (int64, error
 				return 0, fmt.Errorf("create user: %w", err)
 			}
 			id, _ = res.LastInsertId()
-			s.audit(&authUser{ID: id, Username: username}, "user.create", "created via OIDC")
+			s.audit(&authUser{ID: id, Username: username, IP: ip}, "user.create", "created via OIDC")
 		} else {
 			return 0, err
 		}
@@ -196,6 +196,6 @@ func (s *Server) upsertOIDCUser(sub string, claims map[string]any) (int64, error
 			s.db.Exec(`UPDATE users SET is_admin = ? WHERE id = ?`, boolInt(isAdmin), id)
 		}
 	}
-	s.audit(&authUser{ID: id, Username: username}, "login", "OIDC login")
+	s.audit(&authUser{ID: id, Username: username, IP: ip}, "login", "OIDC login")
 	return id, nil
 }

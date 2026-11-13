@@ -72,13 +72,13 @@ func (s *Server) handleCreateRequest(w http.ResponseWriter, r *http.Request, u *
 	var open int
 	s.db.QueryRow(`SELECT COUNT(*) FROM font_requests WHERE user_id = ? AND status = 'open'`, u.ID).Scan(&open)
 	if open >= maxOpenRequests {
-		writeErr(w, 429, "you have many open requests already – wait for an answer first")
+		writeErrCode(w, 409, "limit_reached", "you have many open requests already – wait for an answer first")
 		return
 	}
 	var dup bool
 	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM font_requests WHERE user_id = ? AND status = 'open' AND font = ? COLLATE NOCASE)`, u.ID, font).Scan(&dup)
 	if dup {
-		writeErr(w, 409, "you already requested “"+font+"”")
+		writeErrCode(w, 409, "already_exists", "you already requested “"+font+"”")
 		return
 	}
 	res, err := s.db.Exec(`INSERT INTO font_requests (user_id, font, purpose, created_at) VALUES (?, ?, ?, ?)`,
@@ -122,7 +122,7 @@ func (s *Server) handleUpdateRequest(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	if !u.IsAdmin {
-		writeErr(w, 403, "only admins answer requests")
+		writeErrCode(w, 403, "admin_only", "only admins answer requests")
 		return
 	}
 	answer := ""

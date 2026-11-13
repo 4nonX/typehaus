@@ -123,7 +123,7 @@ func (s *Server) handleDownloadFonts(w http.ResponseWriter, r *http.Request, u *
 func (s *Server) serveDownload(w http.ResponseWriter, u *authUser, ids []int64) {
 	// an API token distributes fonts to another system: no admin exception
 	if (!u.IsAdmin || u.Token != nil) && !s.cfg.Downloads {
-		writeErr(w, 403, "Direct downloads are switched off on this server. Activate the fonts instead – the typehaus app installs them for you.")
+		writeErrCode(w, 403, "downloads_disabled", "Direct downloads are switched off on this server. Activate the fonts instead – the typehaus app installs them for you.")
 		return
 	}
 	fonts, refused, err := s.downloadable(u, ids)
@@ -133,7 +133,7 @@ func (s *Server) serveDownload(w http.ResponseWriter, u *authUser, ids []int64) 
 	}
 	if len(fonts) == 0 {
 		if len(refused) > 0 {
-			writeErr(w, 403, "Can't download: "+strings.Join(refused, "; ")+".")
+			writeErrCode(w, 403, "license_refused", "Can't download: "+strings.Join(refused, "; ")+".")
 		} else {
 			writeErr(w, 404, "font not found")
 		}
