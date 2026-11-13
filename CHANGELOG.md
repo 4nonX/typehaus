@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-13
+
 ### Added
 - **Collections that install themselves.** A collection can now be *installed automatically*: its fonts arrive on every member's computers without being switched on, and leave when someone leaves the group or the collection. Members see them as installed (with the collection's name) and can't switch them off individually. The collection dialog previews how many people, computers and license seats a change affects and refuses changes that would exceed an enforced license.
 - **Font requests.** Users request a missing font (with what it's for) from the library; admins see open requests under *Requests* and answer them (added / declined with a note). Requesters get a badge when an answer arrives.
@@ -113,7 +115,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 - Agent binaries for all platforms bundled in the image and offered on the Devices page.
 - CI and release workflows publishing the container image to GHCR and binaries to GitHub releases.
 
-[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/4nonX/typehaus/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/4nonX/typehaus/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/4nonX/typehaus/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/4nonX/typehaus/compare/v0.2.0...v0.3.0
