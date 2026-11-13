@@ -45,7 +45,7 @@ type licenseRow struct {
 	SeatUnit    string       `json:"seat_unit"` // users | devices
 	Enforce     bool         `json:"enforce"`
 	Download    bool         `json:"downloadable"`
-	LeaseDays   int          `json:"lease_days"` // 0 = fonts stay while a device is offline
+	LeaseDays   int          `json:"lease_days"`          // 0 = fonts stay while a device is offline
 	Reference   string       `json:"reference,omitempty"` // admins only
 	URL         string       `json:"url"`
 	PurchasedOn string       `json:"purchased_on"`
