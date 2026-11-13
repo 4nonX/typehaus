@@ -47,6 +47,11 @@ Usage:
       List the fonts installed on this computer outside typehaus. --send also
       reports them to the server (only if the server collects inventories;
       the app does this by itself once a day).
+  typehaus-agent affinity
+      Check the connection to Affinity (3.3 or later, with Settings > Model
+      Context Protocol > Enable MCP server): lists the open documents, the
+      fonts Affinity is missing and what typehaus can do about them. Changes
+      nothing.
   typehaus-agent unenroll
       Remove all fonts installed by typehaus, disable autostart and forget
       this enrollment.
@@ -94,6 +99,8 @@ func main() {
 		err = cmdStatus()
 	case "inventory":
 		err = cmdInventory(ctx, os.Args[2:])
+	case "affinity":
+		err = cmdAffinity(ctx)
 	case "autostart":
 		err = cmdAutostart(os.Args[2:])
 	case "unenroll":
@@ -225,6 +232,9 @@ func cmdTray(autostart bool) error {
 	}
 	agent.RefreshAutostart() // a newly downloaded version replaces the login copy
 	c.Start()
+	// Affinity has no plugins: typehaus watches its open documents itself
+	c.Affinity().Start()
+	defer c.Affinity().Stop()
 
 	// At login the panel may not be ready yet (Linux); give it time. Syncing
 	// and the window already work meanwhile.
@@ -272,12 +282,19 @@ func cmdRun(ctx context.Context) error {
 		return err
 	}
 	// plugins ask this app about documents' fonts
-	agent.StartPluginAPI(ctx, log, func() (*agent.Agent, error) { return a, nil }, func() {
+	syncNow := func() {
 		select {
 		case a.SyncNow <- struct{}{}:
 		default:
 		}
-	})
+	}
+	agent.StartPluginAPI(ctx, log, func() (*agent.Agent, error) { return a, nil }, syncNow)
+	// and typehaus watches Affinity's open documents (no plugins there)
+	aff := agent.NewAffinityBridge(log, func() (*agent.Agent, error) { return a, nil }, syncNow, func(kind, text string) {
+		log.Info(text)
+	}, nil)
+	aff.Start()
+	defer aff.Stop()
 	err = a.Run(ctx)
 	if errors.Is(err, agent.ErrRevoked) {
 		if !cfg.KeepOnRevoke {
@@ -599,4 +616,59 @@ func runMachine(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+// cmdAffinity checks the Affinity connection once and prints what it sees.
+func cmdAffinity(ctx context.Context) error {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var a *agent.Agent
+	cfg, err := agent.LoadConfig()
+	if err == nil {
+		a, err = agent.New(cfg, log)
+	}
+	if err != nil {
+		fmt.Println("Note: this computer isn't connected to typehaus – only Affinity is checked.")
+	}
+	b := agent.NewAffinityBridge(log, func() (*agent.Agent, error) {
+		if a == nil {
+			return nil, errors.New("not connected")
+		}
+		return a, nil
+	}, nil, nil, nil)
+	st := b.CheckOnce(ctx)
+	if !st.Connected {
+		return errors.New(st.Message)
+	}
+	fmt.Printf("Connected to %s\n", st.Version)
+	if len(st.Documents) == 0 {
+		fmt.Println("No document is open. Open one and run this again.")
+		return nil
+	}
+	label := map[string]string{
+		"active": "switched on in typehaus", "available": "in typehaus – the app switches it on",
+		"refused": "in typehaus, but not available to you", "unsupported": "in typehaus, but can't be installed on this system",
+		"not_available": "not in typehaus", "": "not checked (not connected to typehaus)",
+	}
+	for _, d := range st.Documents {
+		cur := ""
+		if d.Current {
+			cur = " (current)"
+		}
+		fmt.Printf("\n%s%s – %d font(s)\n", d.Title, cur, len(d.Fonts))
+		for _, f := range d.Fonts {
+			if f.InAffinity {
+				fmt.Printf("  ok       %s\n", f.PostScript)
+				continue
+			}
+			line := label[f.Status]
+			if f.Status == "active" && f.Installed {
+				line = "installed by typehaus – reopen the document if Affinity still misses it"
+			}
+			if f.Reason != "" {
+				line += ": " + f.Reason
+			}
+			fmt.Printf("  missing  %s – %s\n", f.PostScript, line)
+		}
+	}
+	return nil
 }

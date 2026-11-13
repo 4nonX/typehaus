@@ -119,6 +119,13 @@ func (s *Server) routes() http.Handler {
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
+	mux.HandleFunc("POST /api/affinity/mode", s.api(s.affinityMode))
+	mux.HandleFunc("POST /api/affinity/activate", s.api(s.affinityActivate))
+	mux.HandleFunc("POST /api/affinity/request", s.api(s.affinityRequest))
+	mux.HandleFunc("POST /api/affinity/check", s.api(func(w http.ResponseWriter, r *http.Request) {
+		s.c.Affinity().Check()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}))
 	mux.HandleFunc("GET /font/{sha}", s.font)
 
 	return s.guard(mux)
@@ -187,7 +194,52 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"last_server": agent.LastServer(),
 		"notice":      agent.InstallNotice(),
 		"update":      s.c.Update(),
+		"affinity":    s.c.Affinity().State(),
 	})
+}
+
+func (s *Server) affinityMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, "invalid request")
+		return
+	}
+	if err := s.c.Affinity().SetMode(agent.AffinityMode(req.Mode)); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) affinityActivate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Fonts []string `json:"fonts"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	n, err := s.c.Affinity().ActivateMissing(r.Context(), req.Fonts)
+	if err != nil {
+		writeErr(w, 409, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]int{"activated": n})
+}
+
+func (s *Server) affinityRequest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Font     string `json:"font"`
+		Document string `json:"document"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Font) == "" {
+		writeErr(w, 400, "font required")
+		return
+	}
+	if err := s.c.Affinity().Request(r.Context(), req.Font, req.Document); err != nil {
+		writeErr(w, 409, friendly(err))
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {

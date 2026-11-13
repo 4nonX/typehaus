@@ -52,7 +52,8 @@ async function refresh() {
   const phase = S.status.phase;
   // do not re-render the connect form while the user is typing in it
   if (phase === 'disconnected' && $('#connect')) { updateNotice(); return; }
-  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.autostart, S.update, S.notice]);
+  const aff = S.affinity ? { ...S.affinity, checked: undefined } : null;
+  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.autostart, S.update, S.notice, aff]);
   if (key === lastKey) { tickTimes(); return; }
   lastKey = key;
   render();
@@ -107,6 +108,8 @@ function render() {
       <div class="meta">${esc(f.faces.map((x) => x.style).join(' · '))}</div></div>`).join('')
       : `<div class="empty">No fonts yet. Turn fonts on in the <button class="btn link" id="lib2">font library</button> and they appear here within a minute.</div>`}</div>
 
+    ${affinitySection()}
+
     <h2><span>Recent activity</span></h2>
     <div>${S.events.length ? S.events.slice(0, 12).map((e) => `
       <div class="ev ${esc(e.kind)}"><i></i><span>${e.kind === 'added' ? 'Installed ' : e.kind === 'removed' ? 'Removed ' : ''}${esc(e.text)}</span><time>${clock(e.time)}</time></div>`).join('')
@@ -126,7 +129,87 @@ function render() {
     try { await api('POST', '/api/autostart', { enabled: e.target.checked }); } catch (ex) { e.target.checked = !e.target.checked; alert(ex.message); }
   };
   $('#disc').onclick = confirmDisconnect;
+  wireAffinity();
   loadPreviews();
+}
+
+// ---- Affinity ----------------------------------------------------------------
+// Affinity has no plugins; typehaus reads its open documents through
+// Affinity's MCP server and lists the fonts Affinity is missing.
+const requestedFonts = new Set(); // requested in this window; the button stays done
+const AFF_MODES = { auto: 'Switch on automatically', show: 'Only show them', off: 'Off' };
+function affinityFontRow(f, doc) {
+  const name = f.family ? `${esc(f.family)} ${esc(f.style)}` : esc(f.postscript);
+  const ps = f.family ? `<span class="ps">${esc(f.postscript)}</span>` : '';
+  let state = '';
+  let act = '';
+  switch (f.status) {
+    case 'active':
+      state = f.installed ? '<span class="tag ok">installed</span> <span class="why">If Affinity still lists it as missing, close and reopen the document.</span>'
+        : '<span class="tag">installing…</span>';
+      break;
+    case 'available':
+      state = '<span class="tag">in typehaus</span>';
+      act = `<button class="btn sm" data-aon="${esc(f.postscript)}">Switch on</button>`;
+      break;
+    case 'refused':
+      state = `<span class="tag warn">not available to you</span> <span class="why">${esc(f.reason || '')}</span>`;
+      act = `<button class="btn sm" data-areq="${esc(f.postscript)}" data-doc="${esc(doc)}">Request</button>`;
+      break;
+    case 'unsupported':
+      state = `<span class="tag warn">can't be installed here</span> <span class="why">${esc(f.reason || '')}</span>`;
+      break;
+    case 'not_available':
+      state = '<span class="tag warn">not in typehaus</span>';
+      act = `<button class="btn sm" data-areq="${esc(f.postscript)}" data-doc="${esc(doc)}">Request</button>`;
+      break;
+    default:
+      state = '<span class="tag">checking…</span>';
+  }
+  if (act && requestedFonts.has(f.postscript)) act = '<button class="btn sm" disabled>Requested</button>';
+  return `<div class="afont"><div class="grow"><b>${name}</b> ${ps}<div>${state}</div></div>${act}</div>`;
+}
+
+function affinitySection() {
+  const a = S.affinity;
+  if (!a) return '';
+  const select = `<select id="affmode" aria-label="Missing fonts in Affinity">${Object.entries(AFF_MODES).map(([k, v]) => `<option value="${k}" ${a.mode === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+  const setting = `<div class="set"><div class="grow">Fonts missing in Affinity<div class="sub">typehaus switches on the fonts your open Affinity documents use – if you may use them.</div></div>${select}</div>`;
+  if (a.mode === 'off') return `<h2><span>Affinity</span><span>off</span></h2>${setting}`;
+  if (!a.connected) {
+    return `<h2><span>Affinity</span><span>not connected</span></h2>
+      <div class="affhelp"><p>${esc(a.message || 'Looking for Affinity…')}</p>
+        <ol><li>Use Affinity 3.3 or later.</li><li>In Affinity open <b>Settings → Model Context Protocol</b> and turn on <b>Enable MCP server</b>.</li><li>Restart Affinity. typehaus connects by itself within a few seconds.</li></ol></div>${setting}`;
+  }
+  const docs = a.documents || [];
+  const missing = docs.reduce((n, d) => n + d.fonts.filter((f) => !f.in_affinity).length, 0);
+  const avail = docs.some((d) => d.fonts.some((f) => !f.in_affinity && f.status === 'available'));
+  const body = docs.length ? docs.map((d) => {
+    const miss = d.fonts.filter((f) => !f.in_affinity);
+    return `<div class="adoc"><div class="adoc-h"><b>${esc(d.title || 'Untitled')}</b>${d.current ? ' <span class="tag">current</span>' : ''}
+      <span class="sub">${miss.length ? `${plural(miss.length, 'font')} missing` : `all ${plural(d.fonts.length, 'font')} available`}</span></div>
+      ${miss.map((f) => affinityFontRow(f, d.title)).join('')}</div>`;
+  }).join('') : '<div class="empty">No document open in Affinity.</div>';
+  return `<h2><span>Affinity</span><span>${missing ? plural(missing, 'font') + ' missing' : 'connected'}</span></h2>
+    ${avail && a.mode === 'show' ? '<div class="actions" style="margin:0 0 8px"><button class="btn primary sm" id="affall">Switch on all available</button></div>' : ''}
+    <div id="affdocs">${body}</div>${setting}`;
+}
+
+function wireAffinity() {
+  const m = $('#affmode');
+  if (!m) return;
+  m.onchange = async () => { try { await api('POST', '/api/affinity/mode', { mode: m.value }); lastKey = ''; refresh(); } catch (e) { alert(e.message); } };
+  document.querySelectorAll('[data-aon]').forEach((b) => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Switching on…';
+    try { await api('POST', '/api/affinity/activate', { fonts: [b.dataset.aon] }); lastKey = ''; refresh(); } catch (e) { alert(e.message); b.disabled = false; b.textContent = 'Switch on'; }
+  });
+  const all = $('#affall');
+  if (all) all.onclick = async () => { all.disabled = true; try { await api('POST', '/api/affinity/activate', { fonts: [] }); lastKey = ''; refresh(); } catch (e) { alert(e.message); all.disabled = false; } };
+  document.querySelectorAll('[data-areq]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('POST', '/api/affinity/request', { font: b.dataset.areq, document: b.dataset.doc }); requestedFonts.add(b.dataset.areq); b.textContent = 'Requested'; }
+    catch (e) { alert(e.message); b.disabled = false; }
+  });
 }
 
 const loaded = new Map();

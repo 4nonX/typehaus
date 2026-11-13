@@ -129,7 +129,8 @@ func RefreshAutostart() {
 // ---- small preferences that survive disconnecting -------------------------
 
 type prefs struct {
-	LastServer string `json:"last_server,omitempty"`
+	LastServer string       `json:"last_server,omitempty"`
+	Affinity   AffinityMode `json:"affinity,omitempty"`
 }
 
 func prefsPath() (string, error) {

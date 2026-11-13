@@ -57,11 +57,34 @@ type Controller struct {
 	paused    int // fonts removed by an ended offline lease (loop goroutine only)
 	cancel    context.CancelFunc
 	done      chan struct{}
+	affinity  *AffinityBridge
 }
 
 // NewController creates a controller; call Start to begin syncing.
 func NewController(log *slog.Logger) *Controller {
-	return &Controller{log: log, syncNow: make(chan struct{}, 1), status: Status{Phase: PhaseDisconnected}}
+	c := &Controller{log: log, syncNow: make(chan struct{}, 1), status: Status{Phase: PhaseDisconnected}}
+	c.affinity = NewAffinityBridge(log, c.agent, c.SyncNow, func(kind, text string) {
+		c.addEvent(kind, text)
+		c.notify()
+	}, c.notify)
+	return c
+}
+
+// Affinity is the bridge to Affinity's MCP server; the app starts it.
+func (c *Controller) Affinity() *AffinityBridge { return c.affinity }
+
+// agent returns an agent for the current enrollment.
+func (c *Controller) agent() (*Agent, error) {
+	c.mu.Lock()
+	cfg := c.cfg
+	c.mu.Unlock()
+	if cfg == nil {
+		var err error
+		if cfg, err = LoadConfig(); err != nil {
+			return nil, err
+		}
+	}
+	return New(cfg, c.log)
 }
 
 // OnChange registers f to be called (in a goroutine-safe way) after every

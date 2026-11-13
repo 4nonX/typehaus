@@ -23,6 +23,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/4nonX/typehaus/internal/agent/affinitytest"
 )
 
 var (
@@ -146,6 +148,14 @@ func main() {
 
 	step("plugin API: a document's missing fonts are switched on through the running app")
 	e.pluginFlow(expected)
+
+	step("Affinity: fonts an open document misses are switched on through Affinity's MCP server")
+	e.api("DELETE", "/api/activations", map[string]any{"font_ids": ids}, nil)
+	e.agent("sync")
+	if n := len(e.installed(e.home)); n != 0 {
+		fail("expected 0 installed fonts before the Affinity step, got %d", n)
+	}
+	e.affinityFlow(expected)
 
 	step("revoke the device: agent must refuse to sync")
 	e.api("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
@@ -555,4 +565,54 @@ func (e *env) pluginFlow(expected map[string]bool) {
 	} else {
 		resp.Body.Close()
 	}
+}
+
+// affinityFlow runs the app against an emulation of Affinity's MCP server
+// whose open document uses the library's fonts: the app must read the
+// document, switch the fonts on and install them – nothing else involved.
+func (e *env) affinityFlow(expected map[string]bool) {
+	fake, err := affinitytest.Start("")
+	check(err)
+	defer fake.Close()
+	var lib []struct {
+		SHA256     string `json:"sha256"`
+		PostScript string `json:"postscript_name"`
+	}
+	e.api("GET", "/api/fonts", nil, &lib)
+	doc := affinitytest.Doc{Title: "E2E poster.af", Current: true, Fonts: []affinitytest.Font{{Name: "Futura-Bold"}, {Name: "ArialMT", Installed: true}}}
+	for _, f := range lib {
+		doc.Fonts = append(doc.Fonts, affinitytest.Font{Name: f.PostScript})
+	}
+	fake.SetDocs(doc)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	check(err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	cmd := exec.Command(*agentBin, "run")
+	cmd.Env = append(append(os.Environ(), e.extra...), fmt.Sprintf("TYPEHAUS_PLUGIN_PORT=%d", port),
+		"TYPEHAUS_AFFINITY_URL="+fake.URL, "TYPEHAUS_AFFINITY=auto")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	check(cmd.Start())
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		if failed {
+			fmt.Println("---- agent run output ----\n" + out.String())
+		}
+	}()
+	waitFor("fonts installed for the Affinity document", 60*time.Second, func() bool {
+		return len(e.installed(e.home)) == len(expected)
+	})
+	for _, f := range e.installed(e.home) {
+		if !expected[f.SHA256] {
+			fail("%s should not be installed on %s", f.Path, runtime.GOOS)
+		}
+		verifyUserInstalled(e, f)
+	}
+	calls := strings.Join(fake.Calls(), ",")
+	if !strings.Contains(calls, "initialize") || !strings.Contains(calls, "tools/call:read_sdk_documentation_topic") || fake.Scripts() == 0 {
+		fail("unexpected MCP conversation: %s", calls)
+	}
+	fmt.Printf("ok: %d font(s) an Affinity document uses were switched on and installed (%d scripts run)\n", len(expected), fake.Scripts())
 }
