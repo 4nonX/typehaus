@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/4nonX/typehaus/internal/protocol"
 )
 
 // Phase is the high-level agent state shown in the tray and agent window.
@@ -135,6 +137,21 @@ func (c *Controller) Events() []Event {
 	for i, e := range c.events {
 		out[len(c.events)-1-i] = e
 	}
+	return out
+}
+
+// Existing lists library fonts not installed because this computer already
+// has a font with the same name outside typehaus, sorted by name.
+func (c *Controller) Existing() []protocol.Existing {
+	st, err := LoadState()
+	out := []protocol.Existing{}
+	if err != nil {
+		return out
+	}
+	for _, e := range st.Existing {
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].FullName) < strings.ToLower(out[j].FullName) })
 	return out
 }
 

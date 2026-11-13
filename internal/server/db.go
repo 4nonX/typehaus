@@ -382,6 +382,19 @@ CREATE TABLE license_users (
 );
 CREATE INDEX license_users_user ON license_users(user_id);
 `,
+	// 26: library fonts a computer didn't install because it already has a
+	// font with the same name outside typehaus
+	`
+CREATE TABLE device_existing (
+	device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+	sha256    TEXT NOT NULL,
+	full_name TEXT NOT NULL DEFAULT '',
+	path      TEXT NOT NULL DEFAULT '',
+	same      INTEGER NOT NULL DEFAULT 0,
+	reported_at INTEGER NOT NULL,
+	PRIMARY KEY (device_id, sha256)
+);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

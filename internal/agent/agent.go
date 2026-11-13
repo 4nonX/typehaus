@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ type State struct {
 	// InventoryAt is when they were last sent.
 	Inventory   bool      `json:"inventory,omitempty"`
 	InventoryAt time.Time `json:"inventory_at,omitempty"`
+	// Existing: library fonts not installed because the computer already
+	// has a font with the same PostScript name outside typehaus, by sha256.
+	Existing map[string]*protocol.Existing `json:"existing,omitempty"`
 }
 
 // ConfigDir returns the per-user directory for config and state (or the
@@ -401,6 +405,14 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 		}
 		want[f.SHA256] = f
 	}
+	// never a second copy of a font the computer already has
+	st.Existing = nil
+	if m.ExistingFonts != "install" {
+		st.Existing = a.existingFonts(ctx, st, want)
+		for sha := range st.Existing {
+			delete(want, sha)
+		}
+	}
 	changed := false
 
 	if a.OnApply != nil {
@@ -495,6 +507,11 @@ func (a *Agent) Sync(ctx context.Context, force bool) (*SyncResult, error) {
 // needsRepair reports whether any recorded font is missing on disk or a
 // removal is still pending – in that case the manifest must be re-applied.
 func (a *Agent) needsRepair(st *State) bool {
+	for _, e := range st.Existing {
+		if _, err := os.Stat(e.Path); err != nil {
+			return true // the other copy is gone: install the library's
+		}
+	}
 	for _, f := range st.Fonts {
 		if f.PendingRemoval {
 			return true
@@ -504,6 +521,57 @@ func (a *Agent) needsRepair(st *State) bool {
 		}
 	}
 	return false
+}
+
+// existingFonts finds the fonts about to be installed whose PostScript name
+// is already installed on this computer outside typehaus – the system's
+// fonts, ones the person installed themselves, Adobe Fonts. typehaus never
+// puts a second copy next to them: two fonts with one name make apps pick
+// either, or list it twice. Fonts typehaus already installed are not
+// checked again.
+func (a *Agent) existingFonts(ctx context.Context, st *State, want map[string]protocol.ManifestFont) map[string]*protocol.Existing {
+	var todo []protocol.ManifestFont
+	for sha, mf := range want {
+		if _, ok := st.Fonts[sha]; !ok && mf.PostScript != "" {
+			todo = append(todo, mf)
+		}
+	}
+	if len(todo) == 0 {
+		return nil
+	}
+	own := map[string]bool{}
+	for _, f := range st.Fonts {
+		own[filepath.Clean(f.Path)] = true
+	}
+	for _, p := range MachineFontPaths() {
+		own[filepath.Clean(p)] = true
+	}
+	faces := systemFontFaces(ctx)
+	out := map[string]*protocol.Existing{}
+	for _, mf := range todo {
+		var hit *protocol.Existing
+		for _, f := range faces[strings.ToLower(mf.PostScript)] {
+			if own[f.Path] {
+				continue
+			}
+			if f.SHA256 == mf.SHA256 {
+				hit = &protocol.Existing{SHA256: mf.SHA256, FullName: mf.FullName, Path: f.Path, Same: true}
+				break
+			}
+			if hit == nil {
+				hit = &protocol.Existing{SHA256: mf.SHA256, FullName: mf.FullName, Path: f.Path}
+			}
+		}
+		if hit != nil {
+			out[mf.SHA256] = hit
+			a.log.Info("font already installed outside typehaus – not installing a second copy",
+				"font", mf.FullName, "path", hit.Path, "identical", hit.Same)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]`)
@@ -607,6 +675,10 @@ func (a *Agent) ReloadSession() {
 
 func (a *Agent) report(ctx context.Context, st *State, errs []protocol.ReportError) error {
 	rep := protocol.Report{AgentVersion: Version, Installed: []string{}, Errors: errs}
+	for _, e := range st.Existing {
+		rep.Existing = append(rep.Existing, *e)
+	}
+	sort.Slice(rep.Existing, func(i, j int) bool { return rep.Existing[i].SHA256 < rep.Existing[j].SHA256 })
 	for sha, f := range st.Fonts {
 		if !f.PendingRemoval {
 			rep.Installed = append(rep.Installed, sha)

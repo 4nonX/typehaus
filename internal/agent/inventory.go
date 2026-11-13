@@ -274,21 +274,39 @@ func systemFontDirs() []string {
 
 var systemFonts struct {
 	sync.Mutex
-	names map[string]bool
+	faces map[string][]systemFace
 	at    time.Time
-	dirs  string // the folders the names came from
+	dirs  string // the folders the faces came from
+}
+
+// systemFace is one installed font file with a given PostScript name.
+type systemFace struct {
+	Path   string
+	SHA256 string
 }
 
 // SystemFontNames returns the PostScript names (lower case) of every font
-// installed on this computer, by typehaus or otherwise. The scan is cached
-// on disk per file and in memory for a minute.
+// installed on this computer, by typehaus or otherwise.
 func SystemFontNames(ctx context.Context) map[string]bool {
+	faces := systemFontFaces(ctx)
+	names := make(map[string]bool, len(faces))
+	for n := range faces {
+		names[n] = true
+	}
+	return names
+}
+
+// systemFontFaces maps PostScript names (lower case) to the files installed
+// on this computer under that name – the system's, the user's, Adobe Fonts
+// and typehaus's own. The scan is cached on disk per file and in memory for
+// a minute.
+func systemFontFaces(ctx context.Context) map[string][]systemFace {
 	systemFonts.Lock()
 	defer systemFonts.Unlock()
 	dirs := systemFontDirs()
 	key := strings.Join(dirs, "\x00")
-	if systemFonts.names != nil && systemFonts.dirs == key && time.Since(systemFonts.at) < time.Minute {
-		return systemFonts.names
+	if systemFonts.faces != nil && systemFonts.dirs == key && time.Since(systemFonts.at) < time.Minute {
+		return systemFonts.faces
 	}
 	d, _ := ConfigDir()
 	cachePath := filepath.Join(d, "system-fonts-cache.json")
@@ -297,7 +315,7 @@ func SystemFontNames(ctx context.Context) map[string]bool {
 		json.Unmarshal(b, &cache)
 	}
 	next := map[string]inventoryCacheEntry{}
-	names := map[string]bool{}
+	faces := map[string][]systemFace{}
 	for _, dir := range dirs {
 		filepath.WalkDir(dir, func(p string, de fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
@@ -321,7 +339,8 @@ func SystemFontNames(ctx context.Context) map[string]bool {
 			next[p] = e
 			for _, f := range e.Fonts {
 				if f.PostScript != "" {
-					names[strings.ToLower(f.PostScript)] = true
+					n := strings.ToLower(f.PostScript)
+					faces[n] = append(faces[n], systemFace{Path: p, SHA256: f.SHA256})
 				}
 			}
 			return nil
@@ -330,13 +349,13 @@ func SystemFontNames(ctx context.Context) map[string]bool {
 	if d != "" {
 		writeJSONFile(cachePath, next, 0o600)
 	}
-	systemFonts.names, systemFonts.at, systemFonts.dirs = names, time.Now(), key
-	return names
+	systemFonts.faces, systemFonts.at, systemFonts.dirs = faces, time.Now(), key
+	return faces
 }
 
 // forgetSystemFonts makes the next lookup scan again (after an install).
 func forgetSystemFonts() {
 	systemFonts.Lock()
-	systemFonts.names = nil
+	systemFonts.faces = nil
 	systemFonts.Unlock()
 }

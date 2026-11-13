@@ -20,7 +20,7 @@ typehaus does the core of it, free:
 - **Fonts that are simply there.** A collection is either *available* (members switch fonts on as needed) or *installed automatically*: every member's computers get its fonts without anyone lifting a finger, and they leave when someone leaves the group. Before saving, typehaus shows how many people, computers and license seats the change affects, and refuses it if an enforced license would run out of seats.
 - **Font requests.** Missing a font? Users ask for it in the web UI with what they need it for; admins answer (added, or declined with a reason), and the answer shows up for the requester.
 - **Activate from the browser.** Toggle a family or a single style. Every computer you enrolled installs it within a minute and removes it when you turn it off.
-- **No admin rights.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux.
+- **No admin rights, and hands off your own fonts.** Fonts are installed per user: HKCU registration on Windows, `~/Library/Fonts` on macOS, fontconfig on Linux. typehaus only ever changes files it installed itself, and never puts a second copy next to a font the computer already has. See [what typehaus does on your computer](#what-typehaus-does-on-your-computer).
 - **Or download the files.** Prefer the traditional way? Download a single style, a whole family or a selection (ZIP, with Type 1 metrics files and the license documents) and install it yourself. Licenses can forbid this; enforced licenses only allow downloads to people holding a seat. `TYPEHAUS_DOWNLOADS=false` turns it off for everyone but admins.
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
 - **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device – or the named people it was bought for, so only they get the fonts –, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically; fonts from commercial foundries are suggested for review with the evidence from each file, and licenses can be set per family or per style. Choose per license whether administrators take seats. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
@@ -98,6 +98,22 @@ That's it. Fonts you switch on in the library appear within a minute. *Start at 
 **Rolling out to many computers:** `typehaus-setup-windows.exe /S` installs silently (Intune, GPO, scripts) and `"%LOCALAPPDATA%\Programs\typehaus\uninstall.exe" /S` removes it. Each user then connects once with an enrollment code, or enroll from a script with `typehaus-agent enroll`.
 
 The standalone programs (`typehaus-agent-<os>-<arch>`, under *Other downloads*) need no installation – for servers, scripts and portable use.
+
+### What typehaus does on your computer
+
+The short version: it adds its own font files next to yours, and touches nothing else.
+
+| | What typehaus does | Where |
+|---|---|---|
+| **Installs** | Only fonts switched on in the library for the signed-in person (or installed for them by a collection). Every file carries `typehaus-` and part of its checksum in the name. | Windows: `%LOCALAPPDATA%\typehaus\fonts`, registered under `HKCU\…\Fonts` as `Name [typehaus 3f2a91c0]`<br>macOS: `~/Library/Fonts/typehaus-…`<br>Linux: `~/.local/share/fonts/typehaus/` |
+| **Removes** | Only files from its own list of what it installed – when a font is switched off, access is revoked, a license expires, or typehaus is disconnected or uninstalled. It never deletes by scanning a folder. | as above |
+| **Leaves alone** | Every font it didn't install: the system's, ones you installed yourself, Adobe Fonts. If a font with the same name is already there, typehaus **doesn't install a second copy** (two fonts with one name make apps pick either one or list it twice). The app window, `typehaus-agent status` and the Devices page list such fonts – *same file* or *other version*. Remove the other copy, and typehaus installs the library's at its next sync. Administrators can choose *Install the library's copy anyway* on the Devices page. | – |
+| **Reads** | The names and checksums of installed fonts, to avoid duplicates and to tell the design-app panels what's missing. Sent to the server only if the administrator turns on the inventory scan (`TYPEHAUS_INVENTORY`) – names and checksums, never the files. The Affinity connection and the panels read which fonts open documents use; they never change documents. | system, user and Adobe Fonts folders |
+| **Needs** | No administrator rights. The optional Windows service for all users (`machine install`) is the only part that runs elevated and writes to `%WINDIR%\Fonts` – again only its own `typehaus-` files. | – |
+| **Talks to** | Your typehaus server, and on this computer only: its window (`127.0.0.1`, random port and token), the plugin API for design-app panels (`127.0.0.1:47130`, refuses web pages) and Affinity's MCP server (`127.0.0.1:6767`). Nothing else. | – |
+| **Keeps** | Its settings, the device token and its list of installed fonts. | `%APPDATA%\typehaus`, `~/Library/Application Support/typehaus`, `~/.config/typehaus` |
+
+The code that does this is short and readable: [installing and removing](internal/agent/agent.go), [per system](internal/agent/platform_windows.go) ([macOS](internal/agent/platform_darwin.go), [Linux](internal/agent/platform_unix.go)), [what it scans](internal/agent/inventory.go).
 
 **The tray icon is the status light:**
 
@@ -181,7 +197,7 @@ Behaviour worth knowing:
 - **Revoked device or disabled user:** the agent removes everything it installed and returns to "not connected".
 - **Fonts in use:** a font that can't be removed because an application has it open (Windows) is retried on every sync.
 - **Integrity:** every download is verified against its SHA-256. Missing or damaged files are reinstalled automatically.
-- Only files the agent installed itself are ever touched. Your own fonts are left alone. (If the server enables the inventory scan, their names and checksums are reported once a day – never the files.)
+- Only files the agent installed itself are ever touched, and fonts the computer already has are never installed a second time (see [above](#what-typehaus-does-on-your-computer)).
 - **Signing:** the release pipeline signs Windows builds (SignPath Foundation) and signs and notarizes macOS builds (Apple Developer ID) once the credentials are configured; see [docs/signing.md](docs/signing.md). Until then, Windows SmartScreen asks once (*More info → Run anyway*). On macOS, move typehaus.app to *Applications* first; then on macOS 15+ open it once and go to *System Settings → Privacy & Security → Open Anyway*, or on older macOS right-click → *Open*.
 - **Updates:** when the server runs a newer version, the app shows *Update available* in its menu and window. The new download replaces the running app and takes over *Start at login*.
 - **Account disabled:** the app removes its fonts but stays connected; they come back automatically when the account is enabled again. Revoking a device or deleting the user disconnects it for good.

@@ -357,6 +357,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/webhook-events", s.admin(s.handleWebhookEvents))
 	mux.Handle("GET /api/services", s.noTokens(s.admin(s.handleListServices)))
 	mux.Handle("PUT /api/services/{id}", s.noTokens(s.admin(s.handleSetService)))
+	mux.Handle("GET /api/settings", s.noTokens(s.admin(s.handleGetSettings)))
+	mux.Handle("PUT /api/settings", s.noTokens(s.admin(s.handleSetSettings)))
 
 	// free font catalog and font identification
 	mux.Handle("GET /api/catalog", s.user(s.handleCatalogSearch))

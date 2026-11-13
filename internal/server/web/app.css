@@ -439,3 +439,10 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .chip-x { border: 0; background: none; color: var(--ink-3); font-size: 15px; line-height: 1; padding: 0 4px; cursor: pointer; border-radius: 999px; }
 .chip-x:hover { color: var(--ink); background: var(--rule); }
 .people-pick .pp-add { flex: 1; min-width: 200px; border: 0; background: transparent; padding: 5px 4px; font: inherit; color: var(--ink); outline: none; }
+
+/* devices: fonts already installed outside typehaus */
+tr.subrow td { padding-top: 0; border-top: 0; }
+details.existing summary { cursor: pointer; color: var(--ink-2); }
+details.existing ul { margin: 6px 0 4px; padding-left: 18px; }
+details.existing li { margin: 3px 0; }
+.existing-policy { margin-top: 18px; max-width: 760px; }

@@ -31,6 +31,15 @@ type deviceRow struct {
 	LastIP       string `json:"last_ip"`
 	CreatedAt    int64  `json:"created_at"`
 	Installed    int    `json:"installed"`
+	// Existing: library fonts the computer didn't install because it already
+	// has a font with the same name outside typehaus.
+	Existing []deviceExisting `json:"existing"`
+}
+
+type deviceExisting struct {
+	FullName string `json:"full_name"`
+	Path     string `json:"path"` // the copy that is already installed
+	Same     bool   `json:"same"` // the identical file: nothing is missing
 }
 
 func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request, u *authUser) {
@@ -50,14 +59,31 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request, u *au
 	}
 	defer rows.Close()
 	out := []deviceRow{}
+	byID := map[int64]int{}
 	for rows.Next() {
-		var d deviceRow
+		d := deviceRow{Existing: []deviceExisting{}}
 		var ls sql.NullInt64
 		rows.Scan(&d.ID, &d.UserID, &d.Username, &d.Name, &d.Platform, &d.Hostname, &d.AgentVersion, &ls, &d.LastIP, &d.CreatedAt, &d.Installed)
 		if ls.Valid {
 			d.LastSeen = &ls.Int64
 		}
+		byID[d.ID] = len(out)
 		out = append(out, d)
+	}
+	rows.Close()
+	if len(out) > 0 {
+		erows, err := s.db.Query(`SELECT device_id, full_name, path, same FROM device_existing ORDER BY full_name COLLATE NOCASE`)
+		if err == nil {
+			for erows.Next() {
+				var id int64
+				var e deviceExisting
+				erows.Scan(&id, &e.FullName, &e.Path, &e.Same)
+				if i, ok := byID[id]; ok {
+					out[i].Existing = append(out[i].Existing, e)
+				}
+			}
+			erows.Close()
+		}
 	}
 	writeJSON(w, 200, out)
 }
@@ -259,6 +285,7 @@ func (s *Server) manifestFonts(userID int64, d *authDevice) ([]protocol.Manifest
 		if extras != "" && extras != "[]" {
 			json.Unmarshal([]byte(extras), &m.Extras)
 		}
+		m.PostScript = ps
 		if m.Kind == "sfnt" {
 			m.Kind = "" // keep the manifest identical for TrueType/OpenType (older agents)
 		}
@@ -286,9 +313,10 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		return
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%d|%s|%d|%s|%t|", protocol.Version, d.User, s.cfg.PollSeconds, Version, s.cfg.Inventory)
+	policy := s.existingFontsPolicy()
+	fmt.Fprintf(h, "%d|%s|%d|%s|%t|%s|", protocol.Version, d.User, s.cfg.PollSeconds, Version, s.cfg.Inventory, policy)
 	for _, f := range fonts {
-		fmt.Fprintf(h, "%s%s%s%d", f.SHA256, f.Filename, f.Kind, f.LeaseDays)
+		fmt.Fprintf(h, "%s%s%s%d%s", f.SHA256, f.Filename, f.Kind, f.LeaseDays, f.PostScript)
 		for _, e := range f.Extras {
 			h.Write([]byte(e.SHA256 + e.Ext))
 		}
@@ -306,6 +334,7 @@ func (s *Server) handleAgentManifest(w http.ResponseWriter, r *http.Request, d *
 		ServerVersion:   Version,
 		Fonts:           fonts,
 		Inventory:       s.cfg.Inventory,
+		ExistingFonts:   policy,
 	})
 }
 
@@ -371,6 +400,14 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request, d *au
 	}
 	for _, sha := range stale {
 		tx.Exec(`DELETE FROM device_fonts WHERE device_id = ? AND sha256 = ?`, d.ID, sha)
+	}
+	tx.Exec(`DELETE FROM device_existing WHERE device_id = ?`, d.ID)
+	for i, e := range rep.Existing {
+		if i >= 5000 || !shaRe.MatchString(e.SHA256) {
+			continue
+		}
+		tx.Exec(`INSERT OR REPLACE INTO device_existing (device_id, sha256, full_name, path, same, reported_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			d.ID, e.SHA256, trunc(e.FullName, 300), trunc(e.Path, 1000), e.Same, now())
 	}
 	if err := tx.Commit(); err != nil {
 		s.internalErr(w, err)

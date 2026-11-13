@@ -28,8 +28,11 @@ type ManifestFont struct {
 	Family   string `json:"family"`
 	Style    string `json:"style"`
 	FullName string `json:"full_name"`
-	Format   string `json:"format"`
-	Size     int64  `json:"size"`
+	// PostScript is the font's PostScript name (the name design apps and
+	// documents use); the app checks it against fonts already installed.
+	PostScript string `json:"postscript_name,omitempty"`
+	Format     string `json:"format"`
+	Size       int64  `json:"size"`
 	// Kind is sfnt (TrueType/OpenType), type1, winfnt, pcf or bdf.
 	Kind string `json:"kind,omitempty"`
 	// Extras are companion files installed next to the font with the same
@@ -57,6 +60,21 @@ type Manifest struct {
 	// Inventory asks the agent to report the fonts installed outside
 	// typehaus (at most once a day) to POST /api/agent/inventory.
 	Inventory bool `json:"inventory,omitempty"`
+	// ExistingFonts says what to do with a font whose PostScript name is
+	// already installed on the computer outside typehaus: "" or "skip" –
+	// don't install a second copy (report it); "install" – install anyway.
+	ExistingFonts string `json:"existing_fonts,omitempty"`
+}
+
+// Existing is a library font the app did not install because a font with the
+// same PostScript name is already on the computer outside typehaus.
+type Existing struct {
+	SHA256   string `json:"sha256"`    // the library font
+	FullName string `json:"full_name"` // the library font
+	Path     string `json:"path"`      // the copy already installed
+	// Same: the installed copy is the identical file – nothing is missing.
+	// Otherwise it is another version or another font with the same name.
+	Same bool `json:"same"`
 }
 
 // InventoryFont is one font file found outside typehaus on a device.
@@ -82,6 +100,9 @@ type Report struct {
 	AgentVersion string        `json:"agent_version"`
 	Installed    []string      `json:"installed"` // sha256 list
 	Errors       []ReportError `json:"errors,omitempty"`
+	// Existing lists the fonts not installed because the computer already
+	// has a font with the same name (see Manifest.ExistingFonts).
+	Existing []Existing `json:"existing,omitempty"`
 }
 
 type ReportError struct {

@@ -161,6 +161,9 @@ func cmdEnroll(ctx context.Context, args []string) error {
 		return fmt.Errorf("first sync: %w", err)
 	}
 	fmt.Printf("Synced: %d font file(s) installed.\n", len(res.Added))
+	if st, err := agent.LoadState(); err == nil {
+		printExisting(st)
+	}
 	fmt.Println("Next: run 'typehaus-agent autostart enable' to keep fonts in sync automatically.")
 	return nil
 }
@@ -422,7 +425,29 @@ func cmdStatus() error {
 	if len(st.Paused) > 0 {
 		fmt.Printf("Paused:     %d font file(s) – the license allows only limited time offline; they return when the server is reachable\n", len(st.Paused))
 	}
+	printExisting(st)
 	return nil
+}
+
+// printExisting lists the library fonts left out because this computer
+// already has them outside typehaus.
+func printExisting(st *agent.State) {
+	if len(st.Existing) == 0 {
+		return
+	}
+	var ex []string
+	for _, e := range st.Existing {
+		how := "another version"
+		if e.Same {
+			how = "the same file"
+		}
+		ex = append(ex, fmt.Sprintf("   %s – %s is already installed: %s", e.FullName, how, e.Path))
+	}
+	sort.Strings(ex)
+	fmt.Printf("Not installed again: %d font(s) this computer already has outside typehaus\n", len(ex))
+	for _, l := range ex {
+		fmt.Println(l)
+	}
 }
 
 func cmdAutostart(args []string) error {

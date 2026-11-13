@@ -86,6 +86,10 @@ func main() {
 
 	step("sign in and upload " + *fontPath)
 	e.api("POST", "/api/auth/login", map[string]string{"username": "admin", "password": "e2e-password-123"}, nil)
+	// CI takes some test fonts from this computer's own font folders, so the
+	// app would rightly refuse to install them a second time. Install anyway
+	// to exercise every format; the "existing" step checks the default.
+	e.api("PUT", "/api/settings", map[string]any{"existing_fonts": "install"}, nil)
 	ids := e.upload(strings.Split(*fontPath, ","))
 	var fonts []struct {
 		ID        int64  `json:"id"`
@@ -135,6 +139,9 @@ func main() {
 
 	step("inventory: fonts copied in by hand are reported, typehaus' own are not")
 	e.inventory(ids, inst, tmp)
+
+	step("fonts already on the computer are never installed a second time")
+	inst = e.existing(ids, inst, tmp)
 
 	step("deactivate and remove")
 	e.api("DELETE", "/api/activations", map[string]any{"font_ids": ids}, nil)
@@ -422,6 +429,84 @@ func (e *env) inventory(ids []int64, inst []installed, tmp string) {
 	fmt.Printf("ok: server lists %s as an unmanaged copy (%s)\n", inv.Findings[0].Family, inv.Findings[0].Copies[0].Path)
 	e.api("PATCH", "/api/fonts", map[string]any{"font_ids": ids, "license_id": 0}, nil)
 	e.api("DELETE", fmt.Sprintf("/api/licenses/%d", lic["id"]), nil, nil)
+}
+
+// existing puts a copy of a library font where the system loads fonts from,
+// as if the person had installed it themselves, and checks that the app
+// reports it instead of installing it again – and installs the library's
+// once the other copy is gone.
+func (e *env) existing(ids []int64, inst []installed, tmp string) []installed {
+	var f *installed
+	for i := range inst {
+		if inst[i].Kind == "" || inst[i].Kind == "sfnt" {
+			f = &inst[i]
+		}
+	}
+	if f == nil {
+		fail("existing needs an installed TrueType/OpenType font")
+	}
+	b, err := os.ReadFile(f.Path)
+	check(err)
+	e.api("PUT", "/api/settings", map[string]any{"existing_fonts": "skip"}, nil)
+	e.api("DELETE", "/api/activations", map[string]any{"font_ids": ids}, nil)
+	e.agent("sync")
+	if n := len(e.installed(e.home)); n != 0 {
+		fail("expected 0 installed fonts, got %d", n)
+	}
+
+	own := filepath.Join(tmp, "own-fonts")
+	check(os.MkdirAll(own, 0o755))
+	copyPath := filepath.Join(own, "installed-by-hand.ttf")
+	check(os.WriteFile(copyPath, b, 0o644))
+	saved := e.extra
+	e.extra = append(append([]string{}, saved...), "TYPEHAUS_INVENTORY_DIRS="+own)
+	defer func() { e.extra = saved }()
+
+	e.api("POST", "/api/activations", map[string]any{"font_ids": ids}, nil)
+	e.agent("sync")
+	now := e.installed(e.home)
+	for _, g := range now {
+		if g.SHA256 == f.SHA256 {
+			fail("%s was installed next to the copy already on the computer", f.Family)
+		}
+	}
+	if len(now) != len(inst)-1 {
+		fail("expected the other %d font(s) installed, got %d", len(inst)-1, len(now))
+	}
+	ex, _ := e.state()["existing"].(map[string]any)
+	got, _ := ex[f.SHA256].(map[string]any)
+	if got == nil || got["same"] != true || filepath.Clean(got["path"].(string)) != filepath.Clean(copyPath) {
+		fail("app state doesn't name the existing copy: %v", e.state()["existing"])
+	}
+	if c, err := os.ReadFile(copyPath); err != nil || string(c) != string(b) {
+		fail("the person's own copy was touched")
+	}
+	var devs []struct {
+		Existing []struct {
+			Path string `json:"path"`
+			Same bool   `json:"same"`
+		} `json:"existing"`
+	}
+	e.api("GET", "/api/devices?all=1", nil, &devs)
+	reported := false
+	for _, d := range devs {
+		for _, x := range d.Existing {
+			reported = reported || (x.Same && filepath.Clean(x.Path) == filepath.Clean(copyPath))
+		}
+	}
+	if !reported {
+		fail("the server doesn't list the existing copy: %+v", devs)
+	}
+
+	// the copy goes: the next ordinary sync installs the library's own
+	check(os.Remove(copyPath))
+	e.agent("sync")
+	now = e.installed(e.home)
+	if len(now) != len(inst) {
+		fail("expected %d installed after the copy was removed, got %d", len(inst), len(now))
+	}
+	e.api("PUT", "/api/settings", map[string]any{"existing_fonts": "install"}, nil)
+	return now
 }
 
 func (e *env) state() map[string]any {

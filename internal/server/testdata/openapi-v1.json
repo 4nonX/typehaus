@@ -267,6 +267,12 @@
           "created_at": {
             "type": "integer"
           },
+          "existing": {
+            "items": {
+              "$ref": "#/components/schemas/deviceExisting"
+            },
+            "type": "array"
+          },
           "hostname": {
             "type": "string"
           },
@@ -308,7 +314,8 @@
           "agent_version",
           "last_ip",
           "created_at",
-          "installed"
+          "installed",
+          "existing"
         ],
         "type": "object"
       },
@@ -1948,6 +1955,25 @@
         "required": [
           "id",
           "secret"
+        ],
+        "type": "object"
+      },
+      "deviceExisting": {
+        "properties": {
+          "full_name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "same": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "full_name",
+          "path",
+          "same"
         ],
         "type": "object"
       }

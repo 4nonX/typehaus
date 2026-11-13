@@ -199,6 +199,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		"status":      s.c.Status(),
 		"events":      s.c.Events(),
 		"fonts":       fonts,
+		"existing":    s.c.Existing(),
 		"autostart":   agent.AutostartEnabled(),
 		"version":     agent.Version,
 		"hostname":    host,

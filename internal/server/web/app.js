@@ -1128,9 +1128,23 @@ async function renderDevices(page) {
         ${showAll ? `<td>${esc(d.username)}</td>` : ''}<td>${platformLabel(d.platform)}</td>
         <td title="${d.last_seen ? fmtDate(d.last_seen) : ''}${d.last_ip ? ' · ' + esc(d.last_ip) : ''}">${ago(d.last_seen)}</td>
         <td class="num">${d.installed}</td><td class="mono">${esc(d.agent_version || '–')}</td>
-        <td style="text-align:right"><button class="btn sm danger" data-revoke="${d.id}" data-name="${esc(d.name)}">Revoke</button></td></tr>`;
-      }).join('')}</tbody></table>` : '<div class="empty">No devices enrolled yet.</div>'}`;
+        <td style="text-align:right"><button class="btn sm danger" data-revoke="${d.id}" data-name="${esc(d.name)}">Revoke</button></td></tr>
+        ${d.existing.length ? `<tr class="subrow"><td colspan="${showAll ? 7 : 6}"><details class="existing"><summary class="small">${plural(d.existing.length, 'font')} already installed on this computer outside typehaus – not installed a second time</summary>
+          <ul class="small">${d.existing.map((x) => `<li><b>${esc(x.full_name)}</b> <span class="mono muted">${esc(x.path)}</span> ${x.same
+            ? '<span class="badge" title="The identical file – nothing is missing">same file</span>'
+            : '<span class="badge warn" title="A different file with the same font name. Remove it from the computer to get the library\'s version.">other version</span>'}</li>`).join('')}</ul></details></td></tr>` : ''}`;
+      }).join('')}</tbody></table>` : '<div class="empty">No devices enrolled yet.</div>'}
+    ${S.me.is_admin ? `<div class="card existing-policy"><label class="field" style="margin:0">Fonts a computer already has
+      <select id="existing-policy"><option value="skip">Don't install a second copy (recommended)</option><option value="install">Install the library's copy anyway</option></select></label>
+      <p class="small muted" style="margin:6px 0 0">When a computer already has a font with the same name – a system font, one the person installed themselves, or Adobe Fonts – typehaus leaves it alone. Two fonts with one name make design apps pick either one or list it twice. Computers report such fonts here; once the other copy is removed, typehaus installs the library's.</p></div>` : ''}`;
 
+  const pol = $('#existing-policy', page);
+  if (pol) {
+    api('GET', '/api/settings').then((st) => { pol.value = st.existing_fonts; }).catch(() => {});
+    pol.onchange = async () => {
+      try { await api('PUT', '/api/settings', { existing_fonts: pol.value }); toast('Saved – computers apply it at their next sync'); } catch (e) { fail(e); }
+    };
+  }
   const dl = $('#dl', page);
   const label = { windows: 'Windows', darwin: 'macOS', linux: 'Linux' };
   const archL = { amd64: 'Intel/AMD', arm64: 'ARM', universal: '' };

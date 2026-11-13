@@ -53,7 +53,7 @@ async function refresh() {
   // do not re-render the connect form while the user is typing in it
   if (phase === 'disconnected' && $('#connect')) { updateNotice(); return; }
   const aff = S.affinity ? { ...S.affinity, checked: undefined } : null;
-  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.autostart, S.update, S.notice, aff]);
+  const key = JSON.stringify([S.status, S.events.length, S.events[0], S.fonts.map((f) => f.sha256), S.existing, S.autostart, S.update, S.notice, aff]);
   if (key === lastKey) { tickTimes(); return; }
   lastKey = key;
   render();
@@ -108,6 +108,8 @@ function render() {
       <div class="meta">${esc(f.faces.map((x) => x.style).join(' · '))}</div></div>`).join('')
       : `<div class="empty">No fonts yet. Turn fonts on in the <button class="btn link" id="lib2">font library</button> and they appear here within a minute.</div>`}</div>
 
+    ${existingSection()}
+
     ${affinitySection()}
 
     ${adobeSection()}
@@ -154,6 +156,19 @@ function wireAdobe() {
     catch (e) { adobeMsg[id] = [false, e.message]; }
     lastKey = ''; refresh();
   });
+}
+
+// fonts the library has for you that this computer already has outside
+// typehaus: left alone, never installed a second time
+function existingSection() {
+  const ex = S.existing || [];
+  if (!ex.length) return '';
+  return `<h2><span>Already on this computer</span><span>${plural(ex.length, 'font')}</span></h2>
+    <p class="sub" style="color:var(--ink-3);font-size:13px;margin:0 0 6px">These fonts are already installed here outside typehaus – by the system, by you, or by Adobe Fonts. typehaus leaves them alone and doesn't install a second copy, so apps never see the same font twice.</p>
+    ${ex.map((e) => `<div class="set"><div class="grow">${esc(e.full_name)}<div class="sub mono" style="word-break:break-all">${esc(e.path)}</div>
+      <div class="sub">${e.same ? 'The same file as in the library – nothing is missing.'
+        : 'A different version under the same name. To use the library\'s version, remove this file; typehaus then installs its own.'}</div></div>
+      <span class="tag ${e.same ? 'ok' : 'warn'}">${e.same ? 'same file' : 'other version'}</span></div>`).join('')}`;
 }
 
 // ---- Affinity ----------------------------------------------------------------
