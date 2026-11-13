@@ -6,7 +6,13 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-13
+
+typehaus 1.0: the API is stable – everything under `/api/v1` changes only compatibly from here on.
+
 ### Added
+- **API for other tools.** A documented HTTP/JSON API under `/api/v1` for ticket systems, document servers, brand portals and scripts: fonts (list, details, upload, download, licenses), collections, licenses with their documents, font requests, people and groups, computers, usage and inventory reports, the activity log. The server describes every endpoint at `/api/v1/openapi.json` (OpenAPI 3.1, generated from the code, so it always matches the version you run). See [docs/api.md](docs/api.md).
+- **API tokens.** Administrators create them on the new *API* page: *read* or *read & write*, with an optional expiry, shown once and stored only as a hash. Tokens act for the organisation and appear in the activity log as `token:<name>`; they only work on `/api/v1` (not for sign-in, accounts, the apps or token management) and stop working when revoked, expired, or when their creator is no longer an active administrator. Font downloads through a token follow the license rules without the administrator exception.
 - **Exact preview sizes.** Next to the size slider, a field takes the preview size in points (4–400 pt, half points allowed), as design apps show text at 100 %. The size now applies to the expanded styles too and is remembered per browser.
 - **Switch everything on or off.** A switch above the library list turns on or off every font in the current view – the whole library, a collection or a search result. It shows a half state when only some are on, asks before switching more than ten styles, and leaves fonts installed by the organisation alone.
 - **Waterfall.** A family's *Info* shows the sample text from 8 to 72 pt, for any of its styles.
@@ -146,7 +152,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 - Agent binaries for all platforms bundled in the image and offered on the Devices page.
 - CI and release workflows publishing the container image to GHCR and binaries to GitHub releases.
 
-[Unreleased]: https://github.com/4nonX/typehaus/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/4nonX/typehaus/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/4nonX/typehaus/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/4nonX/typehaus/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/4nonX/typehaus/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/4nonX/typehaus/compare/v0.3.0...v0.3.1

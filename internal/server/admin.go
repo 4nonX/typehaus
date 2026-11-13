@@ -244,19 +244,40 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request, u *aut
 		return
 	}
 	defer rows.Close()
-	type grp struct {
-		ID          int64  `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Members     int    `json:"members"`
-	}
-	out := []grp{}
+	out := []groupRow{}
 	for rows.Next() {
-		var g grp
+		var g groupRow
 		rows.Scan(&g.ID, &g.Name, &g.Description, &g.Members)
 		out = append(out, g)
 	}
 	writeJSON(w, 200, out)
+}
+
+type groupRow struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Members     int    `json:"members"`
+}
+
+// usageRow is one family in the usage report.
+type usageRow struct {
+	Family    string  `json:"family"`
+	Faces     int     `json:"faces"`
+	License   *string `json:"license"`
+	Seats     *int    `json:"seats"`
+	Users     int     `json:"users"`
+	Admins    int     `json:"uncounted_admins"` // admins with it active whose license does not count them
+	Devices   int     `json:"devices"`
+	UserNames string  `json:"user_names"`
+}
+
+type auditEntry struct {
+	ID     int64  `json:"id"`
+	TS     int64  `json:"ts"`
+	Actor  string `json:"actor"`
+	Action string `json:"action"`
+	Detail string `json:"detail"`
 }
 
 type groupReq struct {
@@ -327,16 +348,6 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, u *au
 // ---- reports ----------------------------------------------------------------------
 
 func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *authUser) {
-	type famRow struct {
-		Family    string  `json:"family"`
-		Faces     int     `json:"faces"`
-		License   *string `json:"license"`
-		Seats     *int    `json:"seats"`
-		Users     int     `json:"users"`
-		Admins    int     `json:"uncounted_admins"` // admins with it active whose license does not count them
-		Devices   int     `json:"devices"`
-		UserNames string  `json:"user_names"`
-	}
 	// Users and devices are counted the way each font's license counts them:
 	// admins (and their own computers) are left out where a license says so.
 	rows, err := s.db.Query(`SELECT f.family, COUNT(DISTINCT f.id), MAX(l.name), MAX(l.seats),
@@ -360,9 +371,9 @@ func (s *Server) handleUsageReport(w http.ResponseWriter, r *http.Request, u *au
 		return
 	}
 	defer rows.Close()
-	out := []famRow{}
+	out := []usageRow{}
 	for rows.Next() {
-		var f famRow
+		var f usageRow
 		var lic sql.NullString
 		var seats sql.NullInt64
 		rows.Scan(&f.Family, &f.Faces, &lic, &seats, &f.Users, &f.Admins, &f.Devices, &f.UserNames)
@@ -396,16 +407,9 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *authUser
 		return
 	}
 	defer rows.Close()
-	type entry struct {
-		ID     int64  `json:"id"`
-		TS     int64  `json:"ts"`
-		Actor  string `json:"actor"`
-		Action string `json:"action"`
-		Detail string `json:"detail"`
-	}
-	out := []entry{}
+	out := []auditEntry{}
 	for rows.Next() {
-		var e entry
+		var e auditEntry
 		rows.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.Detail)
 		out = append(out, e)
 	}

@@ -78,6 +78,7 @@ const ROUTES = {
   licenses: { title: 'Licenses', render: renderLicenses, admin: true },
   requests: { title: 'Requests', render: renderRequests, admin: true },
   activity: { title: 'Activity', render: renderActivity, admin: true },
+  api: { title: 'API', render: renderAPI, admin: true },
 };
 
 function route() {
@@ -1846,6 +1847,72 @@ async function licenseDetail(id, done) {
   { submit: 'Close', cancel: false, wide: true, onSubmit: async () => {} });
   if (hist.length) wireUsageChart(d, hist, l);
   wireDocs($('#docbox', d), l, done);
+}
+
+// ---------------------------------------------------------------------------
+// API tokens (admin)
+// ---------------------------------------------------------------------------
+async function renderAPI(page) {
+  const toks = await api('GET', '/api/tokens');
+  const base = location.origin;
+  page.innerHTML = `
+    <div class="row"><div><h1>API</h1><p class="sub">Connect other tools – ticket systems, document servers, brand portals, scripts – through the typehaus API.</p></div>
+      <span class="spacer"></span>
+      <a class="btn" href="/api/v1/openapi.json" target="_blank" rel="noopener" title="OpenAPI 3.1 description of every endpoint">API description</a>
+      <button class="btn primary" id="newtok">New token</button></div>
+    <div class="apiintro">
+      <p>Send a token with every request to <code>${esc(base)}/api/v1/…</code>:</p>
+      <pre class="code">curl -H "Authorization: Bearer thk_…" ${esc(base)}/api/v1/licenses</pre>
+      <p class="small muted">A token acts for your organisation, not for a person: <b>read</b> tokens can only look things up;
+        <b>read &amp; write</b> tokens can change everything an administrator can – fonts, collections, licenses, people – except tokens.
+        Font downloads through a token always follow the license rules. Every change is logged under the token's name.
+        A token stops working when it is revoked, expires, or the administrator who created it loses admin rights.</p>
+    </div>
+    <h2>Tokens</h2>
+    ${toks.length ? `<table class="t"><thead><tr><th>Name</th><th>Access</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead><tbody>
+      ${toks.map((t) => {
+        const expired = t.expires_at && t.expires_at * 1000 < Date.now();
+        return `<tr><td><b>${esc(t.name)}</b> <span class="small muted mono">${esc(t.prefix)}…</span></td>
+        <td>${t.scope === 'write' ? '<span class="badge warn">read &amp; write</span>' : '<span class="badge">read</span>'}</td>
+        <td class="small">${ago(t.created_at)} <span class="muted">by ${esc(t.created_by)}</span></td>
+        <td class="small">${t.last_used_at ? `${ago(t.last_used_at)}${t.last_ip ? ` <span class="muted">from ${esc(t.last_ip)}</span>` : ''}` : '<span class="muted">never</span>'}</td>
+        <td class="small">${t.expires_at ? (expired ? '<span class="badge danger">expired</span>' : new Date(t.expires_at * 1000).toLocaleDateString()) : '<span class="muted">never</span>'}</td>
+        <td style="text-align:right"><button class="btn sm danger" data-revoke="${t.id}">Revoke</button></td></tr>`;
+      }).join('')}</tbody></table>`
+    : '<div class="empty"><div class="big">No tokens yet.</div>Create one for each tool you connect, so you can revoke them separately.</div>'}`;
+  const refresh = () => renderAPI(page).catch(fail);
+  $('#newtok', page).onclick = () => dialog('New API token', `
+    <label class="field">Name<input type="text" name="name" required maxlength="100" placeholder="e.g. Jira, Document server, Brand portal"></label>
+    <fieldset class="field"><legend>Access</legend><div class="modes">
+      <label class="mode"><input type="radio" name="scope" value="read" checked><span><b>Read</b><span class="small muted">Look up fonts, licenses, usage, reports. Can't change anything.</span></span></label>
+      <label class="mode"><input type="radio" name="scope" value="write"><span><b>Read &amp; write</b><span class="small muted">Also upload fonts, manage collections, licenses and people – everything an administrator can, except tokens.</span></span></label>
+    </div></fieldset>
+    <label class="field">Expires<select name="expires_days"><option value="30">in 30 days</option><option value="90">in 90 days</option><option value="365" selected>in 1 year</option><option value="0">never</option></select></label>`,
+  { submit: 'Create token', onSubmit: async (fd) => {
+    const r = await api('POST', '/api/tokens', { name: fd.get('name'), scope: fd.get('scope'), expires_days: +fd.get('expires_days') });
+    refresh();
+    showToken(fd.get('name'), r.token);
+  } });
+  $$('[data-revoke]', page).forEach((b) => b.onclick = () => {
+    const t = toks.find((x) => x.id === +b.dataset.revoke);
+    confirmDialog('Revoke token', `Revoke <b>${esc(t.name)}</b>? Tools using it stop working immediately.`,
+      async () => { await api('DELETE', `/api/tokens/${t.id}`); toast('Token revoked'); refresh(); }, 'Revoke');
+  });
+}
+
+// The secret exists only in this dialog: typehaus stores a hash.
+function showToken(name, tok) {
+  const d = dialog(`Token “${name}”`, `
+    <p>Copy the token now – typehaus doesn't keep it and can't show it again.</p>
+    <div class="tokbox"><code id="tokval">${esc(tok)}</code><button type="button" class="btn sm" id="tokcopy">Copy</button></div>
+    <p class="small muted">Store it like a password, e.g. in the tool's secret settings. If it gets lost, revoke it and create a new one.</p>`,
+  { submit: 'Done', cancel: false, onSubmit: async () => {} });
+  $('#tokcopy', d).onclick = async () => {
+    try { await navigator.clipboard.writeText(tok); toast('Token copied'); } catch {
+      const r = document.createRange(); r.selectNodeContents($('#tokval', d)); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      toast('Press Ctrl+C to copy');
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------

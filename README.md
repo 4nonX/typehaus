@@ -22,6 +22,7 @@ typehaus does the core of it, free:
 - **Revocation that works.** Remove a user from a group, disable them, or revoke a device, and the agent removes the fonts it installed.
 - **License management.** Record every license with its terms: allowed use (desktop, web, apps, e-books, video, logos), seats per user or per device, purchase and expiry dates, order reference and terms URL. Attach the EULA, invoice or certificate, and choose which documents users may open. Open-source licenses (OFL, Apache, Ubuntu Font Licence, GPL with font exception, …) are recognised from the fonts and assigned automatically; fonts from commercial foundries are suggested for review with the evidence from each file, and licenses can be set per family or per style. Choose per license whether administrators take seats. See who holds a seat, get warned before a license runs out, export a CSV for audits. Optionally **enforce** a license: no activations beyond the purchased seats, and fonts are removed from computers once the license has expired.
 - **Built for audits.** Usage is recorded daily per license, so you can show the *peak* of the last 12 months (not just today's count) in a chart, the list and the CSV. Commercial licenses don't allow direct downloads unless you say so. Installs "for all users of a computer" are flagged, because a per-user license can't count them – typehaus never puts an enforced per-user license there. For licenses that only allow use while connected, an **offline limit** removes the fonts from a computer that hasn't reached the server for a set number of days; they return once it is back. The optional **inventory scan** lists copies of licensed library fonts that were installed on computers by other means.
+- **API for other tools.** A stable, documented HTTP/JSON API (`/api/v1`, OpenAPI description included) with read-only or read & write tokens: feed font requests into your ticket system, let a document server fetch its fonts under the license rules, sync license data with procurement. See [docs/api.md](docs/api.md).
 - **Activity log.** Uploads, activations, enrollments, sign-ins and admin changes.
 - **Single sign-on.** Optional OIDC (Authentik, Keycloak, Authelia, Zitadel, Entra ID, Google…) with group sync and admin mapping. Local accounts work out of the box.
 - **Small and boring to run.** A single Go binary with an embedded web UI. SQLite plus a content-addressed file store in one `/data` volume. Distroless image, no external services.
@@ -193,6 +194,16 @@ All settings are environment variables.
 Redirect URI: `https://fonts.example.com/auth/oidc/callback`. The login uses the authorization code flow with PKCE and a nonce. An existing local user with the same username is linked on their first SSO login.
 
 **Active Directory / LDAP:** put an IdP that speaks OIDC in front of your directory (Authentik, Keycloak, Authelia and Zitadel all federate LDAP/AD) and use the variables above.
+
+## API
+
+typehaus has a stable HTTP/JSON API under `/api/v1` for other tools. An administrator creates a token under **API → New token** (read, or read & write), and the tool sends it as `Authorization: Bearer thk_…`:
+
+```sh
+curl -H "Authorization: Bearer thk_…" https://fonts.example.com/api/v1/licenses
+```
+
+The server describes every endpoint at `/api/v1/openapi.json` (OpenAPI 3.1). Within version 1 the API changes only compatibly. Details and examples: [docs/api.md](docs/api.md).
 
 ## Backups
 

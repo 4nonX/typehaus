@@ -26,6 +26,26 @@ var licenseRights = []string{"desktop", "web", "app", "ebook", "video", "logo"}
 
 const dateLayout = "2006-01-02"
 
+// licenseDetail is GET /licenses/{id}.
+type licenseDetail struct {
+	License  *licenseRow     `json:"license"`
+	Families []licenseFamily `json:"families"`
+	Holders  []licenseHolder `json:"holders,omitempty"` // admins only
+}
+
+type licenseFamily struct {
+	Family string `json:"family"`
+	Styles int    `json:"styles"`
+}
+
+// licenseHolder is a person (or, for per-device licenses, a computer)
+// holding a seat.
+type licenseHolder struct {
+	Name  string `json:"name"`
+	Extra string `json:"extra,omitempty"`
+	Since int64  `json:"since"`
+}
+
 type licenseDoc struct {
 	ID         int64  `json:"id"`
 	Filename   string `json:"filename"`
@@ -182,6 +202,9 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 			return nil, err
 		}
 		l.Rights = splitList(rights)
+		if u.Token != nil {
+			l.Holder = false // the token's creator, not the token, holds seats
+		}
 		l.Used = l.Users
 		if l.SeatUnit == "devices" {
 			l.Used = l.Devices
@@ -287,30 +310,21 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 		writeErr(w, 404, "license not found")
 		return
 	}
-	type famRow struct {
-		Family string `json:"family"`
-		Styles int    `json:"styles"`
-	}
-	type holder struct {
-		Name  string `json:"name"`
-		Extra string `json:"extra,omitempty"`
-		Since int64  `json:"since"`
-	}
-	fams := []famRow{}
+	fams := []licenseFamily{}
 	fw, fargs := visibleClause(u)
 	rows, err := s.db.Query(`SELECT f.family, COUNT(*) FROM fonts f WHERE f.license_id = ? AND `+fw+
 		` GROUP BY f.family ORDER BY f.family COLLATE NOCASE`, append([]any{id}, fargs...)...)
 	if err == nil {
 		for rows.Next() {
-			var f famRow
+			var f licenseFamily
 			rows.Scan(&f.Family, &f.Styles)
 			fams = append(fams, f)
 		}
 		rows.Close()
 	}
-	resp := map[string]any{"license": ls[0], "families": fams}
+	resp := licenseDetail{License: ls[0], Families: fams}
 	if u.IsAdmin {
-		holders := []holder{}
+		holders := []licenseHolder{}
 		var hq string
 		if ls[0].SeatUnit == "devices" {
 			hq = `SELECT d.name, u.username, MIN(df.installed_at), u.is_admin FROM device_fonts df JOIN fonts f ON f.sha256 = df.sha256
@@ -325,7 +339,7 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 		}
 		if rows, err := s.db.Query(hq, id); err == nil {
 			for rows.Next() {
-				var h holder
+				var h licenseHolder
 				var isAdmin bool
 				rows.Scan(&h.Name, &h.Extra, &h.Since, &isAdmin)
 				if h.Extra == h.Name {
@@ -338,7 +352,7 @@ func (s *Server) handleGetLicense(w http.ResponseWriter, r *http.Request, u *aut
 			}
 			rows.Close()
 		}
-		resp["holders"] = holders
+		resp.Holders = holders
 	}
 	writeJSON(w, 200, resp)
 }

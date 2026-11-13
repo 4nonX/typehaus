@@ -138,6 +138,12 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		}
 		rr.Close()
 	}
+	if u.Token != nil { // a token is not a person: nothing is switched on "for" it
+		for _, f := range out {
+			f.Activated, f.Required, f.RequiredBy = false, false, nil
+		}
+	}
+
 	cr, err := s.db.Query(`SELECT collection_id, font_id FROM collection_fonts`)
 	if err == nil {
 		for cr.Next() {
@@ -148,6 +154,9 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 			}
 		}
 		cr.Close()
+	}
+	for _, f := range out {
+		f.normalize()
 	}
 	writeJSON(w, 200, out)
 }
@@ -175,8 +184,8 @@ func (s *Server) handleGetFont(w http.ResponseWriter, r *http.Request, u *authUs
 	if lic.Valid {
 		f.LicenseID = &lic.Int64
 	}
-	writeJSON(w, 200, map[string]any{"font": f, "copyright": copyright, "license_text": licText, "license_url": licURL,
-		"vendor_id": vendorID, "trademark": trademark})
+	f.normalize()
+	writeJSON(w, 200, fontDetail{Font: &f, Copyright: copyright, LicenseText: licText, LicenseURL: licURL, VendorID: vendorID, Trademark: trademark})
 }
 
 // handleFontFile serves the raw font for browser previews.
@@ -208,6 +217,27 @@ func (s *Server) handleFontFile(w http.ResponseWriter, r *http.Request, u *authU
 }
 
 // ---- upload -----------------------------------------------------------------
+
+// lists are always arrays in the API, never null
+func (f *fontRow) normalize() {
+	if f.RequiredBy == nil {
+		f.RequiredBy = []string{}
+	}
+	if f.Collections == nil {
+		f.Collections = []int64{}
+	}
+}
+
+// fontDetail is GET /fonts/{id}: the font and what its file says about
+// origin and terms.
+type fontDetail struct {
+	Font        *fontRow `json:"font"`
+	Copyright   string   `json:"copyright"`
+	LicenseText string   `json:"license_text"`
+	LicenseURL  string   `json:"license_url"`
+	VendorID    string   `json:"vendor_id"`
+	Trademark   string   `json:"trademark"`
+}
 
 type uploadResult struct {
 	File    string   `json:"file"`

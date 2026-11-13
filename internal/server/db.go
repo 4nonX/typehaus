@@ -271,6 +271,21 @@ UPDATE license_documents SET kind = CASE
 	WHEN lower(filename) GLOB '*cert*' OR lower(filename) GLOB '*zertifikat*' THEN 'certificate'
 	WHEN lower(filename) GLOB '*eula*' OR lower(filename) GLOB '*licen*' OR lower(filename) GLOB '*lizenz*' OR lower(filename) GLOB '*terms*' OR lower(filename) GLOB '*agreement*' THEN 'eula'
 	ELSE 'other' END;`,
+	// 18: API tokens for other tools (stored as hashes)
+	`
+CREATE TABLE api_tokens (
+	id           INTEGER PRIMARY KEY,
+	name         TEXT NOT NULL,
+	token_hash   TEXT NOT NULL UNIQUE,
+	prefix       TEXT NOT NULL,
+	scope        TEXT NOT NULL DEFAULT 'read',
+	created_by   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	created_at   INTEGER NOT NULL,
+	expires_at   INTEGER,
+	last_used_at INTEGER,
+	last_ip      TEXT NOT NULL DEFAULT ''
+);
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

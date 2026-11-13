@@ -346,3 +346,11 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 #docbox { border-radius: 10px; transition: background .15s, outline-color .15s; outline: 2px dashed transparent; outline-offset: 4px; }
 #docbox.dragging { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .docup { flex-wrap: wrap; margin-top: 8px; }
+
+/* API page */
+.apiintro { border: 1px solid var(--rule); border-radius: var(--radius); padding: 14px 16px; background: var(--card); margin: 8px 0 20px; }
+.apiintro p { margin: 0 0 8px; }
+.apiintro pre.code { margin: 0 0 10px; }
+.tokbox { display: flex; gap: 10px; align-items: center; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; }
+.tokbox code { font: 13px var(--mono); flex: 1; overflow-wrap: anywhere; user-select: all; }
+.mode > span > span { display: block; }

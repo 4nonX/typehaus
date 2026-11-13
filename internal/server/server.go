@@ -297,6 +297,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/inventory", s.admin(s.handleInventory))
 	mux.Handle("GET /api/inventory.csv", s.admin(s.handleInventoryCSV))
 
+	// API tokens (managed in the web UI; tokens can't manage tokens) and the
+	// stable API for other tools
+	mux.Handle("GET /api/tokens", s.noTokens(s.admin(s.handleListTokens)))
+	mux.Handle("POST /api/tokens", s.noTokens(s.admin(s.handleCreateToken)))
+	mux.Handle("DELETE /api/tokens/{id}", s.noTokens(s.admin(s.handleDeleteToken)))
+	s.registerV1(mux)
+
 	// agent binaries (public: open-source, needed before a device can authenticate)
 	mux.HandleFunc("GET /api/downloads", s.handleListDownloads)
 	mux.HandleFunc("GET /downloads/{name}", s.handleDownload)
@@ -338,7 +345,9 @@ func (s *Server) csrf(next http.Handler) http.Handler {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
-			if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/agent/") &&
+			// API tokens are sent explicitly, never by the browser on its own
+			tokenCall := strings.HasPrefix(r.URL.Path, "/api/v1/") && bearer(r) != ""
+			if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/agent/") && !tokenCall &&
 				r.Header.Get("X-Typehaus") != "1" {
 				writeErr(w, http.StatusForbidden, "missing X-Typehaus header")
 				return
@@ -361,6 +370,9 @@ type authUser struct {
 	DisplayName string
 	IsAdmin     bool
 	HasPassword bool
+	// Token is set when an API token made the request (ID is then the
+	// administrator who created it).
+	Token *apiToken
 }
 
 type authDevice struct {

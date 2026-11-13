@@ -64,7 +64,10 @@ func (s *Server) downloadable(u *authUser, ids []int64) ([]dlFont, []string, err
 		}
 		json.Unmarshal([]byte(extras), &f.extras)
 		// admins are held to the license too, unless it says not to count them
-		if f.licID.Valid && !(u.IsAdmin && !countAdmins) {
+		if u.Token != nil {
+			holder = false // seats are held by people, not by tokens
+		}
+		if f.licID.Valid && !(u.IsAdmin && u.Token == nil && !countAdmins) {
 			l := lics[f.licID.Int64]
 			if l == nil {
 				l = &dlLicense{name: licName}
@@ -118,7 +121,8 @@ func (s *Server) handleDownloadFonts(w http.ResponseWriter, r *http.Request, u *
 }
 
 func (s *Server) serveDownload(w http.ResponseWriter, u *authUser, ids []int64) {
-	if !u.IsAdmin && !s.cfg.Downloads {
+	// an API token distributes fonts to another system: no admin exception
+	if (!u.IsAdmin || u.Token != nil) && !s.cfg.Downloads {
 		writeErr(w, 403, "Direct downloads are switched off on this server. Activate the fonts instead – the typehaus app installs them for you.")
 		return
 	}
