@@ -96,7 +96,6 @@ input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
 .toggle span::after { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: var(--card); border-radius: 50%; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .toggle input:checked + span { background: var(--accent); }
 .toggle input:checked + span::after { transform: translateX(16px); }
-.toggle input:indeterminate + span { background: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
 .toggle input:indeterminate + span::after { transform: translateX(8px); }
 .toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -315,3 +314,8 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .rt-more { margin-top: 4px; }
 .linkbtn { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .linkbtn:hover { color: var(--ink); }
+
+/* switch for every font in the view */
+.allrow { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px 0; border-bottom: 1px solid var(--rule); margin-bottom: 4px; font-size: 14px; }
+.toggle input:indeterminate + span { background: color-mix(in srgb, var(--accent) 45%, var(--rule)); }
+.allrow.sel { padding-left: 25px; }

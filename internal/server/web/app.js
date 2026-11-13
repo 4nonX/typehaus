@@ -354,6 +354,7 @@ async function renderLibrary(page) {
           </span>
           <button class="btn sm" id="expandall">${L.expanded.size ? 'Collapse all' : 'Expand all'}</button>
         </div>
+        <div id="allrow"></div>
         <div id="bulk"></div>
         <div id="families"></div>
       </section>
@@ -398,6 +399,7 @@ function drawFamilies() {
   const box = $('#families');
   if (!box) return;
   const fams = groupFamilies(filteredFonts());
+  drawAllRow();
   if (!fams.length) {
     box.innerHTML = `<div class="empty"><div class="big">Nothing here yet.</div>${
       L.fonts.length ? 'No fonts match this view.' : (S.me.is_admin ? 'Upload fonts above to build your library.' : 'Ask an administrator to give you access to a collection.')}</div>`;
@@ -608,6 +610,48 @@ function decodeMime(s) {
     const bytes = q.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (__, h) => String.fromCharCode(parseInt(h, 16)));
     try { return decodeURIComponent(escape(bytes)); } catch { return bytes; }
   });
+}
+
+// One switch for every font in the current view (search and collection
+// applied; with "All fonts" and no search that is the whole library). Fonts
+// the organisation installs are always on and not touched.
+function drawAllRow() {
+  const L = S.lib;
+  const row = $('#allrow');
+  if (!row) return;
+  const shown = filteredFonts();
+  if (!shown.length) { row.innerHTML = ''; return; }
+  const whole = String(L.coll) === 'all' && !L.q.trim();
+  const own = shown.filter((f) => f.activated && !f.required);
+  const req = shown.filter((f) => f.required).length;
+  const off = shown.filter((f) => !isOn(f));
+  const on = shown.length - off.length;
+  const label = whole ? 'All fonts' : String(L.coll) === 'active' && !L.q.trim() ? 'All fonts active for me' : `All ${plural(shown.length, 'style')} shown`;
+  row.innerHTML = `<div class="allrow${S.me.is_admin ? " sel" : ""}">
+    <label class="toggle" title="${off.length ? 'Switch on' : 'Switch off'} ${whole ? 'every font in the library' : 'every font in this view'}"><input type="checkbox" id="allon" ${off.length ? '' : 'checked'}><span></span></label>
+    <b>${label}</b>
+    <span class="muted small">${on} of ${plural(shown.length, 'style')} on${req ? ` · ${req} installed by your organisation` : ''}</span></div>`;
+  const cb = $('#allon', row);
+  cb.indeterminate = on > 0 && off.length > 0;
+  cb.onchange = () => {
+    const turnOn = off.length > 0; // partly on: the click completes it
+    cb.checked = !turnOn; cb.indeterminate = on > 0 && off.length > 0; // until confirmed
+    const ids = (turnOn ? off : own).map((f) => f.id);
+    if (!ids.length) {
+      toast(req ? 'These fonts are installed by your organisation and stay on' : 'Nothing to switch');
+      return;
+    }
+    const where = whole ? '' : ' in this view';
+    const go = () => setActive(ids, turnOn);
+    if (ids.length <= 10) { go(); return; }
+    if (turnOn) {
+      dialog('Switch on all fonts', `<p>Switch on <b>${plural(ids.length, 'style')}</b>${where}? They are installed on all your computers within a minute.</p>
+        <p class="small muted">Fonts under licenses without free seats are left off.</p>`, { submit: 'Switch on', onSubmit: go });
+    } else {
+      dialog('Switch off all fonts', `<p>Switch off <b>${plural(ids.length, 'style')}</b>${where}? They are removed from your computers at their next sync.</p>
+        ${req ? `<p class="small muted">${plural(req, 'style')} installed by your organisation stay on.</p>` : ''}`, { submit: 'Switch off', onSubmit: go });
+    }
+  };
 }
 
 function drawBulk() {
