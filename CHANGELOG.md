@@ -15,7 +15,7 @@ The section matching a release tag becomes that release's notes on GitHub.
 - **Copies outside typehaus in the audit exports.** The inventory section exports every copy found as CSV, and the license CSV gained a *Copies outside typehaus* column.
 - Keyboard: `/` jumps to the library search; `Esc` clears the search or preview field.
 - **License documents, fully editable.** Each document has a type (EULA, invoice, certificate or other – read from the file name, changeable), can be renamed, and can be replaced by a new file (a renewed invoice, an updated EULA) keeping its type and visibility; removing asks first. The list shows who added or replaced a file and when. Documents can be dropped onto the list, are also managed in *Edit license*, and can be attached right when creating a license. The license CSV lists them with their type.
-- **Dialogs close with a click outside** (and Esc, as before). If something was typed or changed that only *Save* would keep, typehaus asks before discarding it.
+- **Dialogs close with a click outside** (and Esc, as before). If something was typed or changed that isn't saved yet, typehaus asks: *Save changes*, *Discard changes* or *Keep editing*.
 
 ### Changed
 - Fonts are counted by family (by name) instead of by style file: in the library sidebar, the collections, the switch above the list, selections and messages ("Activated Carlito (3 styles)"). Style counts still appear where they differ.

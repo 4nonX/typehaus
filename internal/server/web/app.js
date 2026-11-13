@@ -190,12 +190,13 @@ function renderLogin(app) {
 // ---------------------------------------------------------------------------
 // dialogs
 // ---------------------------------------------------------------------------
-function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel = true, cancelLabel = 'Cancel', wide = false } = {}) {
+function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel = true, cancelLabel = 'Cancel', extra = null, wide = false } = {}) {
   const d = document.createElement('dialog');
   if (wide) d.classList.add('wide');
   d.innerHTML = `<form method="dialog"><h3>${esc(title)}</h3>${body}
     <div class="err"></div>
     <div class="actions">${cancel ? `<button type="button" class="btn ghost" value="cancel">${esc(cancelLabel)}</button>` : ''}
+    ${extra ? `<button type="button" class="btn ${extra.danger ? 'danger' : ''}" value="extra">${esc(extra.label)}</button>` : ''}
     <button type="submit" class="btn ${danger ? 'accent' : 'primary'}">${esc(submit)}</button></div></form>`;
   document.body.append(d);
   const form = $('form', d);
@@ -208,11 +209,17 @@ function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel
   form.addEventListener('change', touched);
   const requestClose = () => {
     if (!dirty) { d.close(); return; }
-    dialog('Unsaved changes', '<p>You changed something that isn\'t saved yet. Close and discard the changes?</p>',
-      { submit: 'Discard changes', danger: true, cancelLabel: 'Keep editing', onSubmit: () => d.close() });
+    dialog('Unsaved changes', '<p>You changed something that isn\'t saved yet.</p>', {
+      submit: 'Save changes', cancelLabel: 'Keep editing',
+      extra: { label: 'Discard changes', danger: true, onClick: () => d.close() },
+      // save exactly like the form's own button: validation, errors and all
+      onSubmit: () => { setTimeout(() => form.requestSubmit(), 0); },
+    });
   };
   const c = $('[value=cancel]', d);
   if (c) c.onclick = requestClose;
+  const x = $('[value=extra]', d);
+  if (x) x.onclick = () => { d.close(); extra.onClick(); };
   d.addEventListener('cancel', (e) => { e.preventDefault(); requestClose(); }); // Esc
   // a click on the backdrop: pressed and released outside the dialog box
   // (not a text selection that ended outside)
