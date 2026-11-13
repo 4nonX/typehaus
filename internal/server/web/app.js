@@ -190,17 +190,40 @@ function renderLogin(app) {
 // ---------------------------------------------------------------------------
 // dialogs
 // ---------------------------------------------------------------------------
-function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel = true, wide = false } = {}) {
+function dialog(title, body, { submit = 'Save', danger = false, onSubmit, cancel = true, cancelLabel = 'Cancel', wide = false } = {}) {
   const d = document.createElement('dialog');
   if (wide) d.classList.add('wide');
   d.innerHTML = `<form method="dialog"><h3>${esc(title)}</h3>${body}
     <div class="err"></div>
-    <div class="actions">${cancel ? '<button type="button" class="btn ghost" value="cancel">Cancel</button>' : ''}
+    <div class="actions">${cancel ? `<button type="button" class="btn ghost" value="cancel">${esc(cancelLabel)}</button>` : ''}
     <button type="submit" class="btn ${danger ? 'accent' : 'primary'}">${esc(submit)}</button></div></form>`;
   document.body.append(d);
   const form = $('form', d);
+  // Closing (Cancel, Esc, a click outside) asks first when something was
+  // typed or changed that only Save would keep. Controls inside
+  // [data-instant] save by themselves or only change the view.
+  let dirty = false;
+  const touched = (e) => { if (!e.target.closest('[data-instant]')) dirty = true; };
+  form.addEventListener('input', touched);
+  form.addEventListener('change', touched);
+  const requestClose = () => {
+    if (!dirty) { d.close(); return; }
+    dialog('Unsaved changes', '<p>You changed something that isn\'t saved yet. Close and discard the changes?</p>',
+      { submit: 'Discard changes', danger: true, cancelLabel: 'Keep editing', onSubmit: () => d.close() });
+  };
   const c = $('[value=cancel]', d);
-  if (c) c.onclick = () => d.close();
+  if (c) c.onclick = requestClose;
+  d.addEventListener('cancel', (e) => { e.preventDefault(); requestClose(); }); // Esc
+  // a click on the backdrop: pressed and released outside the dialog box
+  // (not a text selection that ended outside)
+  const outside = (e) => {
+    if (e.target !== d) return false;
+    const r = d.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+  let downOutside = false;
+  d.addEventListener('mousedown', (e) => { downOutside = outside(e); });
+  d.addEventListener('click', (e) => { if (downOutside && outside(e)) requestClose(); downOutside = false; });
   d.addEventListener('close', () => d.remove());
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -1308,7 +1331,7 @@ function licenseCard(l) {
       <dt>Term</dt><dd>${termText(l)}${l.purchased_on ? ` <span class="muted small">· purchased ${esc(l.purchased_on)}</span>` : ''}</dd>
       ${l.reference ? `<dt>Reference</dt><dd>${esc(l.reference)}</dd>` : ''}
       ${l.url ? `<dt>Terms</dt><dd><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, ''))} ↗</a></dd>` : ''}
-      ${l.documents.length ? `<dt>Documents</dt><dd>${l.documents.map((d) => `<a href="${docURL(l, d)}" target="_blank" rel="noopener">${esc(d.filename)}</a>`).join('<br>')}</dd>` : ''}
+      ${l.documents.length ? `<dt>Documents</dt><dd>${l.documents.map((d) => `<span class="muted small">${DOC_KINDS[d.kind] || 'Document'}:</span> <a href="${docURL(l, d)}" target="_blank" rel="noopener">${esc(d.filename)}</a>`).join('<br>')}</dd>` : ''}
       ${l.notes ? `<dt>Notes</dt><dd>${richText(l.notes)}</dd>` : ''}
     </dl></div>`;
 }
@@ -1345,7 +1368,7 @@ async function familyInfo(fam) {
       <dt>Styles</dt><dd>${fam.faces.map((f) => esc((f.opsz ? f.opsz + ' ' : '') + f.style)).join(', ')}</dd>
       <dt>Format</dt><dd>${formats.map(esc).join(', ')}</dd>
     </dl>
-    <div class="row wf-head"><h4>Waterfall</h4><span class="spacer"></span>
+    <div class="row wf-head" data-instant><h4>Waterfall</h4><span class="spacer"></span>
       ${fam.faces.length > 1 ? `<select id="wf-face" aria-label="Style">${fam.faces.map((f) => `<option value="${f.id}" ${f.id === r.id ? 'selected' : ''}>${esc((f.opsz ? f.opsz + ' ' : '') + f.style)}</option>`).join('')}</select>` : ''}</div>
     <div class="waterfall" id="wf">${WATERFALL.map((pt) => `<div class="wf-row"><span class="wf-sz">${pt} pt</span><div class="wf-txt loading" style="font-size:${pt}pt">${esc(L.preview || SAMPLES[0].text)}</div></div>`).join('')}</div>
     <h4>License</h4>
@@ -1604,7 +1627,9 @@ function editLicense(l, done) {
       <label class="field">License terms URL<input type="url" name="url" placeholder="https://" value="${esc(l?.url)}"></label>
     </div>
     <label class="field">Notes<textarea name="notes" rows="${l?.notes && l.notes.length > 300 ? 12 : 3}" placeholder="Restrictions, contact at the foundry, renewal terms…">${esc(l?.notes)}</textarea></label>
-    ${l ? '' : '<p class="small muted">Attach the EULA, invoice or certificate after saving – open the license from the list.</p>'}`,
+    ${l ? `<h4>Documents</h4><div id="docbox" data-instant>${docsBlock(l)}</div>`
+    : `<label class="field">Documents <span class="muted">(EULA, invoice, certificate… – optional)</span><input type="file" name="docs" multiple></label>
+      <label class="check"><input type="checkbox" name="docs_shared" checked><span>Documents visible to users who can see these fonts</span></label>`}`,
   {
     wide: true,
     onSubmit: async (fd) => {
@@ -1619,12 +1644,17 @@ function editLicense(l, done) {
       if (l) await api('PATCH', `/api/licenses/${l.id}`, body);
       else {
         const r = await api('POST', '/api/licenses', body);
+        const files = fd.getAll('docs').filter((f) => f && f.size);
+        if (files.length) {
+          try { await uploadDocs(r.id, files, fd.get('docs_shared') === 'on'); } catch (e) { fail(e); }
+        }
         setTimeout(() => licenseDetail(r.id, done), 0);
       }
       toast('License saved');
       done();
     },
   });
+  if (l) wireDocs($('#docbox', d), l, done);
   // new licenses: open-source fonts may be downloaded, commercial ones not
   // unless the EULA allows it
   if (!l) {
@@ -1687,6 +1717,109 @@ function wireUsageChart(box, points, l) {
   $('.hit', el).addEventListener('mouseleave', () => { tip.hidden = true; dot.setAttribute('cx', -10); });
 }
 
+// ---- license documents: EULA, invoice, certificate… ----------------------
+const DOC_KINDS = { eula: 'EULA', invoice: 'Invoice', certificate: 'Certificate', other: 'Document' };
+
+function docsBlock(l) {
+  return `<p class="small muted">EULA, invoice, license certificate… Drop files here or attach them. Documents marked <i>visible to users</i>
+      can be opened by everyone who can see these fonts; the others only by admins. Changes here are saved right away.</p>
+    <div class="docs">${l.documents.map((doc) => `<div class="doc" data-doc="${doc.id}">
+      <select class="doc-kind" aria-label="Type">${Object.entries(DOC_KINDS).map(([k, v]) => `<option value="${k}" ${doc.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+      <div class="doc-main">
+        <a class="doc-name" href="${docURL(l, doc)}" target="_blank" rel="noopener">${esc(doc.filename)}</a>
+        <div class="small muted">${fmtSize(doc.size)} · ${doc.updated_at ? `replaced ${ago(doc.updated_at)}` : `added ${ago(doc.created_at)}`}${doc.uploaded_by ? ` by ${esc(doc.uploaded_by)}` : ''}</div>
+      </div>
+      <label class="small"><input type="checkbox" class="doc-shared" ${doc.shared ? 'checked' : ''}> visible to users</label>
+      <span class="doc-acts">
+        <button type="button" class="linkbtn doc-ren">Rename</button>
+        <button type="button" class="linkbtn doc-rep" title="Upload a new file for this document (e.g. a renewed invoice); type and visibility stay">Replace</button>
+        <a class="small" href="${docURL(l, doc, true)}">Download</a>
+        <button type="button" class="btn sm danger doc-del">Remove</button>
+      </span></div>`).join('') || '<p class="muted small doc-none">No documents attached yet.</p>'}</div>
+    <div class="docup"><button type="button" class="btn sm" id="doc-add">Attach files…</button>
+      <label class="small"><input type="checkbox" id="doc-sharednew" checked> visible to users</label>
+      <span class="small muted">Type is taken from the file name and can be changed.</span>
+      <input type="file" id="doc-file" multiple hidden><input type="file" id="doc-repfile" hidden></div>`;
+}
+
+async function uploadDocs(lid, files, shared) {
+  const fd = new FormData();
+  fd.append('shared', shared ? '1' : '0');
+  files.forEach((f) => fd.append('files', f, f.name));
+  await api('POST', `/api/licenses/${lid}/documents`, fd);
+}
+
+// wireDocs makes a docsBlock editable in place; changed() tells the page
+// behind the dialog (counts, list) to refresh.
+function wireDocs(box, l, changed = () => {}) {
+  const refresh = async (msg) => {
+    if (msg) toast(msg);
+    try {
+      const r = await api('GET', `/api/licenses/${l.id}`);
+      l.documents = r.license.documents;
+      box.innerHTML = docsBlock(l);
+      wireDocs(box, l, changed);
+    } catch (e) { fail(e); }
+    changed();
+  };
+  const path = (did) => `/api/licenses/${l.id}/documents/${did}`;
+  const add = async (files) => {
+    if (!files.length) return;
+    try { await uploadDocs(l.id, files, $('#doc-sharednew', box).checked); refresh(`${plural(files.length, 'document')} attached`); } catch (e) { fail(e); }
+  };
+  $('#doc-add', box).onclick = () => $('#doc-file', box).click();
+  $('#doc-file', box).onchange = (e) => add([...e.target.files]);
+  // drag & drop onto the documents area
+  box.ondragover = (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); box.classList.add('dragging'); } };
+  box.ondragleave = (e) => { if (!box.contains(e.relatedTarget)) box.classList.remove('dragging'); };
+  box.ondrop = (e) => { e.preventDefault(); box.classList.remove('dragging'); add([...e.dataTransfer.files]); };
+  let replacing = null;
+  $('#doc-repfile', box).onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f || !replacing) return;
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    try { await api('PUT', path(replacing), fd); refresh('Document replaced'); } catch (ex) { fail(ex); }
+  };
+  $$('.doc', box).forEach((row) => {
+    const did = row.dataset.doc;
+    const doc = l.documents.find((x) => String(x.id) === did);
+    $('.doc-kind', row).onchange = async (e) => {
+      try { await api('PATCH', path(did), { kind: e.target.value }); doc.kind = e.target.value; toast(`Marked as ${DOC_KINDS[e.target.value]}`); changed(); } catch (ex) { fail(ex); }
+    };
+    $('.doc-shared', row).onchange = async (e) => {
+      try { await api('PATCH', path(did), { shared: e.target.checked }); doc.shared = e.target.checked; toast(e.target.checked ? 'Visible to users' : 'Admins only'); changed(); } catch (ex) { fail(ex); }
+    };
+    $('.doc-rep', row).onclick = () => { replacing = did; const inp = $('#doc-repfile', box); inp.value = ''; inp.click(); };
+    $('.doc-ren', row).onclick = () => {
+      const link = $('.doc-name', row);
+      const inp = document.createElement('input');
+      inp.type = 'text'; inp.className = 'doc-rename'; inp.value = doc.filename; inp.maxLength = 200;
+      link.replaceWith(inp);
+      inp.focus();
+      const dot = doc.filename.lastIndexOf('.');
+      inp.setSelectionRange(0, dot > 0 ? dot : doc.filename.length); // keep the extension
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        const v = inp.value.trim();
+        if (save && v && v !== doc.filename) {
+          try { await api('PATCH', path(did), { filename: v }); refresh('Renamed'); return; } catch (ex) { fail(ex); }
+        }
+        inp.replaceWith(link);
+      };
+      inp.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+      };
+      inp.onblur = () => finish(true);
+    };
+    $('.doc-del', row).onclick = () => confirmDialog('Remove document', `Remove <b>${esc(doc.filename)}</b> from this license? The file is deleted from typehaus.`,
+      async () => { await api('DELETE', path(did)); refresh('Document removed'); }, 'Remove');
+  });
+}
+
 async function licenseDetail(id, done) {
   let r, hist = [];
   try {
@@ -1696,17 +1829,7 @@ async function licenseDetail(id, done) {
   const d = dialog(l.name, `
     ${licenseCard({ ...l, documents: [] })}
     <h4>Documents</h4>
-    <p class="small muted">EULA, invoice, license certificate… Documents marked <i>visible to users</i> can be opened by everyone who can see these fonts; the others only by admins.</p>
-    <div class="docs">${l.documents.map((doc) => `<div class="doc" data-doc="${doc.id}">
-      <a href="${docURL(l, doc)}" target="_blank" rel="noopener">${esc(doc.filename)}</a>
-      <span class="small muted">${fmtSize(doc.size)} · ${ago(doc.created_at)}</span>
-      <span class="spacer"></span>
-      <label class="small"><input type="checkbox" class="doc-shared" ${doc.shared ? 'checked' : ''}> visible to users</label>
-      <a class="small" href="${docURL(l, doc, true)}">Download</a>
-      <button type="button" class="btn sm danger doc-del">Remove</button></div>`).join('') || '<p class="muted small">No documents attached yet.</p>'}</div>
-    <div class="docup"><button type="button" class="btn sm" id="doc-add">Attach files…</button>
-      <label class="small"><input type="checkbox" id="doc-sharednew" checked> visible to users</label>
-      <input type="file" id="doc-file" multiple hidden></div>
+    <div id="docbox" data-instant>${docsBlock(l)}</div>
     <h4>Usage, last 12 months <span class="muted small">peak ${l.seat_unit === 'devices' ? l.peak_devices : l.peak_users} ${l.seat_unit}</span></h4>
     ${usageChart(hist, l)}
     <h4>Fonts <span class="muted small">${plural(r.families.length, 'family', 'families')}</span></h4>
@@ -1715,25 +1838,7 @@ async function licenseDetail(id, done) {
     <p class="small">${(r.holders || []).map((h) => `${esc(h.name)}${h.extra ? ` <span class="muted">(${esc(h.extra)})</span>` : ''}`).join(', ') || '<span class="muted">Nobody yet.</span>'}</p>`,
   { submit: 'Close', cancel: false, wide: true, onSubmit: async () => {} });
   if (hist.length) wireUsageChart(d, hist, l);
-  const reopen = () => { d.close(); done(); licenseDetail(id, done); };
-  $('#doc-add', d).onclick = () => $('#doc-file', d).click();
-  $('#doc-file', d).onchange = async (e) => {
-    const files = [...e.target.files];
-    if (!files.length) return;
-    const fd = new FormData();
-    fd.append('shared', $('#doc-sharednew', d).checked ? '1' : '0');
-    files.forEach((f) => fd.append('files', f, f.name));
-    try { await api('POST', `/api/licenses/${id}/documents`, fd); toast(`${plural(files.length, 'document')} attached`); reopen(); } catch (ex) { fail(ex); }
-  };
-  $$('.doc', d).forEach((row) => {
-    const did = row.dataset.doc;
-    $('.doc-shared', row).onchange = async (e) => {
-      try { await api('PATCH', `/api/licenses/${id}/documents/${did}`, { shared: e.target.checked }); toast(e.target.checked ? 'Visible to users' : 'Admins only'); } catch (ex) { fail(ex); }
-    };
-    $('.doc-del', row).onclick = async () => {
-      try { await api('DELETE', `/api/licenses/${id}/documents/${did}`); toast('Document removed'); reopen(); } catch (ex) { fail(ex); }
-    };
-  });
+  wireDocs($('#docbox', d), l, done);
 }
 
 // ---------------------------------------------------------------------------

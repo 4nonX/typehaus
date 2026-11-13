@@ -27,11 +27,38 @@ var licenseRights = []string{"desktop", "web", "app", "ebook", "video", "logo"}
 const dateLayout = "2006-01-02"
 
 type licenseDoc struct {
-	ID        int64  `json:"id"`
-	Filename  string `json:"filename"`
-	Size      int64  `json:"size"`
-	Shared    bool   `json:"shared"`
-	CreatedAt int64  `json:"created_at"`
+	ID         int64  `json:"id"`
+	Filename   string `json:"filename"`
+	Kind       string `json:"kind"` // eula | invoice | certificate | other
+	Size       int64  `json:"size"`
+	Shared     bool   `json:"shared"`
+	CreatedAt  int64  `json:"created_at"`
+	UpdatedAt  int64  `json:"updated_at,omitempty"` // file replaced
+	UploadedBy string `json:"uploaded_by,omitempty"`
+}
+
+var docKinds = map[string]string{"eula": "EULA", "invoice": "Invoice", "certificate": "Certificate", "other": "Document"}
+
+// guessDocKind reads the type from a file name (English and German words).
+func guessDocKind(name string) string {
+	n := strings.ToLower(name)
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(n, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("invoice", "rechnung", "receipt", "quittung", "order"):
+		return "invoice"
+	case has("cert", "zertifikat"):
+		return "certificate"
+	case has("eula", "licen", "lizenz", "terms", "agreement", "vertrag"):
+		return "eula"
+	}
+	return "other"
 }
 
 type licenseRow struct {
@@ -179,11 +206,13 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	dq := `SELECT id, license_id, filename, size, shared, created_at FROM license_documents`
+	dq := `SELECT d.id, d.license_id, d.filename, d.kind, d.size, d.shared, d.created_at, COALESCE(d.updated_at, 0),
+		COALESCE(NULLIF(us.display_name, ''), us.username, '') FROM license_documents d LEFT JOIN users us ON us.id = d.uploaded_by`
 	if !u.IsAdmin {
-		dq += ` WHERE shared = 1`
+		dq += ` WHERE d.shared = 1`
 	}
-	drows, err := s.db.Query(dq + ` ORDER BY filename COLLATE NOCASE`)
+	// EULA first, then invoices, certificates, the rest
+	drows, err := s.db.Query(dq + ` ORDER BY CASE d.kind WHEN 'eula' THEN 0 WHEN 'invoice' THEN 1 WHEN 'certificate' THEN 2 ELSE 3 END, d.filename COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +220,10 @@ func (s *Server) queryLicenses(u *authUser, where string, args ...any) ([]*licen
 	for drows.Next() {
 		var d licenseDoc
 		var lid int64
-		drows.Scan(&d.ID, &lid, &d.Filename, &d.Size, &d.Shared, &d.CreatedAt)
+		drows.Scan(&d.ID, &lid, &d.Filename, &d.Kind, &d.Size, &d.Shared, &d.CreatedAt, &d.UpdatedAt, &d.UploadedBy)
+		if !u.IsAdmin {
+			d.UploadedBy = ""
+		}
 		if l := byID[lid]; l != nil {
 			l.Documents = append(l.Documents, d)
 		}
@@ -567,6 +599,7 @@ func (s *Server) handleUploadLicenseDocs(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	shared := true
+	kind := "" // "" = from each file name
 	var added []string
 	for {
 		p, err := mr.NextPart()
@@ -580,6 +613,13 @@ func (s *Server) handleUploadLicenseDocs(w http.ResponseWriter, r *http.Request,
 		if p.FormName() == "shared" {
 			v, _ := io.ReadAll(io.LimitReader(p, 8))
 			shared = string(v) != "0" && string(v) != "false"
+			continue
+		}
+		if p.FormName() == "kind" {
+			v, _ := io.ReadAll(io.LimitReader(p, 20))
+			if _, ok := docKinds[string(v)]; ok {
+				kind = string(v)
+			}
 			continue
 		}
 		if p.FileName() == "" {
@@ -603,8 +643,12 @@ func (s *Server) handleUploadLicenseDocs(w http.ResponseWriter, r *http.Request,
 			s.internalErr(w, err)
 			return
 		}
-		if _, err := s.db.Exec(`INSERT INTO license_documents (license_id, sha256, filename, size, shared, uploaded_by, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`, id, sha, name, len(data), boolInt(shared), u.ID, now()); err != nil {
+		k := kind
+		if k == "" {
+			k = guessDocKind(name)
+		}
+		if _, err := s.db.Exec(`INSERT INTO license_documents (license_id, sha256, filename, kind, size, shared, uploaded_by, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, sha, name, k, len(data), boolInt(shared), u.ID, now()); err != nil {
 			s.internalErr(w, err)
 			return
 		}
@@ -704,8 +748,26 @@ func (s *Server) handleUpdateLicenseDoc(w http.ResponseWriter, r *http.Request, 
 	var req struct {
 		Shared   *bool   `json:"shared"`
 		Filename *string `json:"filename"`
+		Kind     *string `json:"kind"`
 	}
 	if !readJSON(w, r, &req) {
+		return
+	}
+	var exists bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM license_documents WHERE id = ? AND license_id = ?)`, did, lid).Scan(&exists)
+	if !exists {
+		writeErr(w, 404, "document not found")
+		return
+	}
+	if req.Kind != nil {
+		if _, ok := docKinds[*req.Kind]; !ok {
+			writeErr(w, 400, "kind must be eula, invoice, certificate or other")
+			return
+		}
+		s.db.Exec(`UPDATE license_documents SET kind = ? WHERE id = ?`, *req.Kind, did)
+	}
+	if req.Filename != nil && strings.TrimSpace(*req.Filename) == "" {
+		writeErr(w, 400, "name required")
 		return
 	}
 	if req.Shared != nil {
@@ -716,6 +778,73 @@ func (s *Server) handleUpdateLicenseDoc(w http.ResponseWriter, r *http.Request, 
 	}
 	s.audit(u, "license.document.update", "license %d, document %d", lid, did)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// handleReplaceLicenseDoc puts a new file into an existing document (a
+// renewed invoice, an updated EULA): type and visibility stay, the name
+// becomes the new file's.
+func (s *Server) handleReplaceLicenseDoc(w http.ResponseWriter, r *http.Request, u *authUser) {
+	lid, ok1 := pathID(r)
+	did, ok2 := docID(r)
+	if !ok1 || !ok2 {
+		writeErr(w, 400, "bad id")
+		return
+	}
+	var oldSha, oldName string
+	if err := s.db.QueryRow(`SELECT sha256, filename FROM license_documents WHERE id = ? AND license_id = ?`, did, lid).Scan(&oldSha, &oldName); err != nil {
+		writeErr(w, 404, "document not found")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLicenseDoc+(1<<20))
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeErr(w, 400, "expected a multipart upload")
+		return
+	}
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeErr(w, 400, "upload interrupted or too large")
+			return
+		}
+		if p.FileName() == "" {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(p, maxLicenseDoc+1))
+		if err != nil {
+			writeErr(w, 400, "upload interrupted or too large")
+			return
+		}
+		name := docFilename(p.FileName())
+		if len(data) > maxLicenseDoc {
+			writeErr(w, 413, name+" is larger than 50 MB")
+			return
+		}
+		if len(data) == 0 {
+			writeErr(w, 400, "the file is empty")
+			return
+		}
+		sha, err := s.storeFile(data)
+		if err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		if _, err := s.db.Exec(`UPDATE license_documents SET sha256 = ?, filename = ?, size = ?, uploaded_by = ?, updated_at = ? WHERE id = ?`,
+			sha, name, len(data), u.ID, now(), did); err != nil {
+			s.internalErr(w, err)
+			return
+		}
+		if sha != oldSha {
+			s.removeBlobIfUnused(oldSha)
+		}
+		s.audit(u, "license.document.replace", "license %d: %s → %s", lid, oldName, name)
+		writeJSON(w, 200, map[string]string{"filename": name})
+		return
+	}
+	writeErr(w, 400, "no file received")
 }
 
 func (s *Server) handleDeleteLicenseDoc(w http.ResponseWriter, r *http.Request, u *authUser) {
@@ -1039,7 +1168,7 @@ func (s *Server) handleLicenseReport(w http.ResponseWriter, r *http.Request, u *
 		}
 		docs := make([]string, len(l.Documents))
 		for i, d := range l.Documents {
-			docs[i] = d.Filename
+			docs[i] = docKinds[d.Kind] + ": " + d.Filename
 		}
 		enforced := "no"
 		if l.Enforce {

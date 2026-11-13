@@ -335,3 +335,14 @@ nav.main .count { display: inline-block; min-width: 18px; padding: 0 5px; border
 .pvctl { display: flex; flex: 1; min-width: 220px; }
 .pvctl input.preview-text { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .pvctl select { flex: none; width: 112px; border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; color: var(--ink-2); }
+
+/* license documents */
+.doc { gap: 12px; }
+.doc .doc-kind { width: auto; padding: 4px 8px; font-size: 13px; }
+.doc .doc-main { flex: 1; min-width: 180px; }
+.doc .doc-name { font-weight: 500; overflow-wrap: anywhere; }
+.doc .doc-rename { width: 100%; padding: 4px 8px; }
+.doc .doc-acts { display: inline-flex; gap: 12px; align-items: center; }
+#docbox { border-radius: 10px; transition: background .15s, outline-color .15s; outline: 2px dashed transparent; outline-offset: 4px; }
+#docbox.dragging { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.docup { flex-wrap: wrap; margin-top: 8px; }

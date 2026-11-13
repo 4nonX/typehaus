@@ -283,6 +283,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/licenses/{id}/documents", s.admin(s.handleUploadLicenseDocs))
 	mux.Handle("GET /api/licenses/{id}/documents/{doc}", s.user(s.handleLicenseDoc))
 	mux.Handle("PATCH /api/licenses/{id}/documents/{doc}", s.admin(s.handleUpdateLicenseDoc))
+	mux.Handle("PUT /api/licenses/{id}/documents/{doc}", s.admin(s.handleReplaceLicenseDoc))
 	mux.Handle("DELETE /api/licenses/{id}/documents/{doc}", s.admin(s.handleDeleteLicenseDoc))
 	mux.Handle("GET /api/reports/usage", s.admin(s.handleUsageReport))
 	mux.Handle("GET /api/audit", s.admin(s.handleAudit))

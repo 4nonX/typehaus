@@ -262,6 +262,15 @@ CREATE INDEX fonts_postscript ON fonts(postscript_name);`,
 ALTER TABLE fonts ADD COLUMN style_auto TEXT NOT NULL DEFAULT '';
 ALTER TABLE fonts ADD COLUMN names_manual INTEGER NOT NULL DEFAULT 0;
 UPDATE fonts SET family_auto = family, style_auto = style;`,
+	// 17: license documents get a type (EULA, invoice, certificate, other) and
+	// remember when their file was last replaced
+	`ALTER TABLE license_documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'other';
+ALTER TABLE license_documents ADD COLUMN updated_at INTEGER;
+UPDATE license_documents SET kind = CASE
+	WHEN lower(filename) GLOB '*invoice*' OR lower(filename) GLOB '*rechnung*' OR lower(filename) GLOB '*receipt*' OR lower(filename) GLOB '*quittung*' THEN 'invoice'
+	WHEN lower(filename) GLOB '*cert*' OR lower(filename) GLOB '*zertifikat*' THEN 'certificate'
+	WHEN lower(filename) GLOB '*eula*' OR lower(filename) GLOB '*licen*' OR lower(filename) GLOB '*lizenz*' OR lower(filename) GLOB '*terms*' OR lower(filename) GLOB '*agreement*' THEN 'eula'
+	ELSE 'other' END;`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {
