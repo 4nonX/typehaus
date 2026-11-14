@@ -345,3 +345,14 @@ process.stdout.write(out.join('\n') + '\n');
 		t.Fatalf("SDK error not reported: %v\n%s", err, out)
 	}
 }
+
+// FuzzParseScriptDocs: what Affinity's script console prints comes from
+// the open documents – font names included.
+func FuzzParseScriptDocs(f *testing.F) {
+	f.Add("warning: something\nN1:{\"ok\":true,\"version\":\"3.3\",\"docs\":[{\"title\":\"A\",\"path\":\"\",\"current\":true,\"fonts\":[[\"B\",true],[\"A\",false]]}]}\n", "N1:")
+	f.Add("TypeError: x is not a function\n    at main:3:9\n", "N1:")
+	f.Add(`N1:{"ok":false,"error":"INVALID_OP"}`, "N1:")
+	f.Fuzz(func(t *testing.T, out, nonce string) {
+		parseScriptDocs(out, nonce)
+	})
+}

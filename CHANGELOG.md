@@ -6,6 +6,14 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Security
+- **Fuzzing.** Every parser that reads uploaded or outside bytes – all font formats, the OpenType reader, the web-font encoders, Type 1 metrics, zip archives, the Aspose and Affinity answers – has a Go fuzz target, run in CI on every push and nightly. Inputs it once broke on are kept as regression tests.
+- **Zip uploads are limited as a whole.** An archive may unpack to at most twice the upload limit (`TYPEHAUS_MAX_UPLOAD_MB`) and hold at most 10,000 files; before, only each file was limited, so a small archive of many highly compressible files could fill the server's memory. Sizes are checked as entries are read, not taken from the archive's own claims.
+- **Compressed fonts are unpacked once.** A `.gz` inside a `.gz` is refused, so a crafted file that unpacks to itself can't make the server loop.
+
+### Fixed
+- **Web fonts from damaged files** (found by fuzzing): the WOFF/WOFF2 encoders computed nothing themselves and could produce files browsers reject – from fonts with wrong table checksums (common in the wild), without a `head` table, with a too-short `head`, with duplicate tables, or with no tables at all. Checksums are now computed, and fonts that can't become a valid web font are refused with a reason.
+
 ## [1.1.3] - 2026-11-13
 
 ### Fixed

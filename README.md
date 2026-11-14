@@ -287,6 +287,14 @@ TYPEHAUS_DATA=./data TYPEHAUS_ADMIN_PASSWORD=adminadmin1 go run ./cmd/typehaus-s
 TYPEHAUS_AGENT_HOME=/tmp/th-agent go run ./cmd/typehaus-agent enroll --server http://localhost:8080 --code …
 ```
 
+**Fuzzing.** Everything that parses uploaded bytes has a Go fuzz target: `FuzzDecode` (every font format), `FuzzParse` (OpenType), `FuzzWebfont` (the WOFF/WOFF2 encoders, checked against an independent decoder), `FuzzPFMFace`, `FuzzUnzip` (archives, with the size limits), `FuzzAsposeFonts` and `FuzzParseScriptDocs` (answers from outside services and Affinity). CI fuzzes each one on every push and for 10 minutes nightly. Locally:
+
+```sh
+go test ./internal/fontmeta -run '^$' -fuzz '^FuzzDecode$' -fuzztime 5m
+```
+
+A failing input is saved in the package's `testdata/fuzz/<Target>/`; commit it with the fix and it runs with every `go test` from then on.
+
 Layout:
 
 ```

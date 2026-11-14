@@ -65,6 +65,13 @@ var CompanionExts = map[string]bool{".pfm": true, ".afm": true, ".inf": true}
 // Decode identifies any supported font format and returns the installable
 // file(s) it contains. A Mac suitcase can contain several fonts.
 func Decode(name string, b []byte) ([]File, error) {
+	return decode(name, b, 0)
+}
+
+// decode: depth counts gzip layers. Fonts come gzipped once (.pcf.gz);
+// a second layer is refused, so a gzip that unpacks to itself can't make
+// the server recurse forever.
+func decode(name string, b []byte, depth int) ([]File, error) {
 	ext := strings.ToLower(filepath.Ext(name))
 	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
 	if len(b) < 4 {
@@ -87,11 +94,14 @@ func Decode(name string, b []byte) ([]File, error) {
 		}
 		return sfntFile(base, sfnt, src)
 	case bytes.HasPrefix(b, []byte{0x1f, 0x8b}): // gzip, e.g. .pcf.gz / .bdf.gz
+		if depth > 0 {
+			return nil, errors.New("a compressed file inside a compressed file – unpack it first")
+		}
 		raw, err := io.ReadAll(io.LimitReader(mustGzip(b), 64<<20))
 		if err != nil || len(raw) < 4 {
 			return nil, fmt.Errorf("cannot decompress: %v", err)
 		}
-		files, err := Decode(strings.TrimSuffix(name, filepath.Ext(name)), raw)
+		files, err := decode(strings.TrimSuffix(name, filepath.Ext(name)), raw, depth+1)
 		for i := range files {
 			if files[i].Source == "" {
 				files[i].Source = files[i].Format + ".gz"

@@ -65,13 +65,47 @@ func sfntTables(b []byte, index int) (uint32, []sfntTable, error) {
 		if tag == "DSIG" {
 			continue // a signature doesn't survive re-encoding
 		}
-		tables = append(tables, sfntTable{tag: tag, checksum: binary.BigEndian.Uint32(r[4:]), data: b[start : start+length]})
+		data := b[start : start+length]
+		if tag == "head" && len(data) < 54 {
+			return 0, nil, errors.New("the head table is too short")
+		}
+		// computed, not copied: fonts in the wild carry wrong checksums, and
+		// decoders check the ones a WOFF declares
+		tables = append(tables, sfntTable{tag: tag, checksum: tableChecksum(tag, data), data: data})
+	}
+	hasHead := false
+	for _, t := range tables {
+		hasHead = hasHead || t.tag == "head"
+	}
+	if !hasHead {
+		return 0, nil, errors.New("the font has no head table") // browsers and WOFF decoders require one
 	}
 	sort.Slice(tables, func(i, j int) bool { return tables[i].tag < tables[j].tag })
+	for i := 1; i < len(tables); i++ {
+		if tables[i].tag == tables[i-1].tag {
+			return 0, nil, fmt.Errorf("table %q appears twice", tables[i].tag)
+		}
+	}
 	return flavor, tables, nil
 }
 
 func pad4(n int) int { return (n + 3) &^ 3 }
+
+// tableChecksum is the OpenType table checksum: the sum of the table's
+// big-endian uint32 words, zero-padded; for head with checkSumAdjustment
+// counted as zero.
+func tableChecksum(tag string, d []byte) uint32 {
+	var sum uint32
+	for i := 0; i < len(d); i += 4 {
+		var w [4]byte
+		copy(w[:], d[i:])
+		if tag == "head" && i == 8 {
+			w = [4]byte{}
+		}
+		sum += binary.BigEndian.Uint32(w[:])
+	}
+	return sum
+}
 
 // putBE writes big-endian values: uint16, uint32 or raw bytes.
 func putBE(w *bytes.Buffer, vals ...any) {

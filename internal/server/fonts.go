@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -428,12 +429,32 @@ func (s *Server) readZip(name string, src io.Reader) ([]upFile, []uploadResult) 
 	if err != nil {
 		return nil, []uploadResult{{File: name, Status: "error", Message: err.Error()}}
 	}
-	zr, err := zip.NewReader(tmp, n)
+	files, errs := unzipFonts(tmp, n, 2*s.cfg.MaxUploadMB<<20)
+	for i := range errs {
+		if errs[i].File == "" {
+			errs[i].File = name
+		}
+	}
+	return files, errs
+}
+
+// maxZipEntries: more files than any font archive has.
+const maxZipEntries = 10000
+
+// unzipFonts expands an uploaded zip. It trusts nothing in the archive:
+// entry sizes are checked as they are read, and the archive as a whole may
+// unpack to at most maxTotal bytes, so a small zip can't fill the memory.
+func unzipFonts(src io.ReaderAt, n, maxTotal int64) ([]upFile, []uploadResult) {
+	zr, err := zip.NewReader(src, n)
 	if err != nil {
-		return nil, []uploadResult{{File: name, Status: "error", Message: "not a valid zip file"}}
+		return nil, []uploadResult{{File: "", Status: "error", Message: "not a valid zip file"}}
+	}
+	if len(zr.File) > maxZipEntries {
+		return nil, []uploadResult{{Status: "error", Message: fmt.Sprintf("the archive has %d files – more than %d", len(zr.File), maxZipEntries)}}
 	}
 	var files []upFile
 	var errs []uploadResult
+	var total int64
 	for _, zf := range zr.File {
 		zn := zf.Name
 		if zf.FileInfo().IsDir() || zf.UncompressedSize64 == 0 {
@@ -453,12 +474,23 @@ func (s *Server) readZip(name string, src io.Reader) ([]upFile, []uploadResult) 
 			errs = append(errs, uploadResult{File: zn, Status: "error", Message: err.Error()})
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, maxFontFile+1))
+		// the declared size may lie: read at most what's left of both limits
+		limit := min(int64(maxFontFile), maxTotal-total)
+		data, err := io.ReadAll(io.LimitReader(rc, limit+1))
 		rc.Close()
 		if err != nil {
 			errs = append(errs, uploadResult{File: zn, Status: "error", Message: err.Error()})
 			continue
 		}
+		if int64(len(data)) > limit {
+			if limit < int64(maxFontFile) {
+				errs = append(errs, uploadResult{File: zn, Status: "error", Message: fmt.Sprintf("the archive unpacks to more than %d MB – the rest was not read", maxTotal>>20)})
+				break
+			}
+			errs = append(errs, uploadResult{File: zn, Status: "error", Message: "file too large"})
+			continue
+		}
+		total += int64(len(data))
 		if ad {
 			zn = path.Join(path.Dir(strings.Replace(zn, "__MACOSX/", "", 1)), strings.TrimPrefix(base, "._"))
 		}

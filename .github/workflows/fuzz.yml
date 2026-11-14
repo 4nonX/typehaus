@@ -1,0 +1,53 @@
+name: fuzz
+
+# typehaus parses font files and archives that users upload. Each parser is
+# fuzzed briefly on every push and longer every night. A failing input is
+# uploaded as an artifact: put it in the package's testdata/fuzz/<Target>/
+# and it becomes a regression test that runs with every `go test`.
+
+on:
+  push:
+    branches: [main]
+    paths: ["**.go", "go.mod", "go.sum", "**/testdata/**", ".github/workflows/fuzz.yml"]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Time per target (e.g. 30m)"
+        default: "10m"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./internal/fontmeta, target: FuzzDecode }
+          - { pkg: ./internal/fontmeta, target: FuzzParse }
+          - { pkg: ./internal/fontmeta, target: FuzzWebfont }
+          - { pkg: ./internal/fontmeta, target: FuzzPFMFace }
+          - { pkg: ./internal/server, target: FuzzUnzip }
+          - { pkg: ./internal/server, target: FuzzAsposeFonts }
+          - { pkg: ./internal/agent, target: FuzzParseScriptDocs }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          FUZZTIME: ${{ github.event_name == 'push' && '60s' || inputs.fuzztime || '10m' }}
+        run: go test ${{ matrix.pkg }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime "$FUZZTIME"
+      - name: Keep the failing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: "**/testdata/fuzz/${{ matrix.target }}/"
+          if-no-files-found: ignore
