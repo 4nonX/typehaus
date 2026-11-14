@@ -22,7 +22,7 @@ import (
 
 // slowParse: no input in the corpus (≤ a few hundred KB) may take longer.
 // Generous, because fuzzing runs instrumented and in parallel.
-const slowParse = time.Second
+const slowParse = time.Second * raceSlowdown
 
 // fuzzSeeds is one small, valid example of every format Decode accepts,
 // plus the real fonts in testdata/fonts.
