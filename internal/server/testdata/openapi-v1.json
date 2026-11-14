@@ -458,6 +458,9 @@
           "activated": {
             "type": "boolean"
           },
+          "class": {
+            "type": "string"
+          },
           "collections": {
             "items": {
               "type": "integer"
@@ -545,10 +548,16 @@
           "style_auto": {
             "type": "string"
           },
+          "variable": {
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           },
           "weight": {
+            "type": "integer"
+          },
+          "width": {
             "type": "integer"
           }
         },
@@ -580,7 +589,10 @@
           "created_at",
           "family_auto",
           "style_auto",
-          "names_manual"
+          "names_manual",
+          "class",
+          "variable",
+          "width"
         ],
         "type": "object"
       },
@@ -3672,6 +3684,15 @@
             "x-field-type": "boolean"
           },
           {
+            "description": "filter: only entries whose class equals this value (comma-separated: any of them; text ignores case)",
+            "in": "query",
+            "name": "class",
+            "schema": {
+              "type": "string"
+            },
+            "x-field-type": "string"
+          },
+          {
             "description": "filter: only entries whose conflict equals this value (comma-separated: any of them; text ignores case)",
             "in": "query",
             "name": "conflict",
@@ -3888,6 +3909,15 @@
             "x-field-type": "string"
           },
           {
+            "description": "filter: only entries whose variable equals this value (comma-separated: any of them; text ignores case)",
+            "in": "query",
+            "name": "variable",
+            "schema": {
+              "type": "string"
+            },
+            "x-field-type": "boolean"
+          },
+          {
             "description": "filter: only entries whose version equals this value (comma-separated: any of them; text ignores case)",
             "in": "query",
             "name": "version",
@@ -3900,6 +3930,15 @@
             "description": "filter: only entries whose weight equals this value (comma-separated: any of them; text ignores case)",
             "in": "query",
             "name": "weight",
+            "schema": {
+              "type": "string"
+            },
+            "x-field-type": "integer"
+          },
+          {
+            "description": "filter: only entries whose width equals this value (comma-separated: any of them; text ignores case)",
+            "in": "query",
+            "name": "width",
             "schema": {
               "type": "string"
             },

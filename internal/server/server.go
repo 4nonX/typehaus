@@ -138,6 +138,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 		return nil, err
 	}
 	s.refreshFamilyNames()
+	go s.refreshClasses()
 	if cfg.OIDCIssuer != "" {
 		if cfg.BaseURL == "" {
 			return nil, errors.New("TYPEHAUS_BASE_URL is required when OIDC is enabled")

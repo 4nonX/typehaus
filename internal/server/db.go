@@ -395,6 +395,15 @@ CREATE TABLE device_existing (
 	PRIMARY KEY (device_id, sha256)
 );
 `,
+	// 27: what the library filters by – design classification (from the
+	// font, or the free catalog's category), variable fonts, width class.
+	// class_v marks fonts whose files were read for it.
+	`
+ALTER TABLE fonts ADD COLUMN class TEXT NOT NULL DEFAULT '';
+ALTER TABLE fonts ADD COLUMN variable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE fonts ADD COLUMN width INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE fonts ADD COLUMN class_v INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func openDB(dataDir string) (*sql.DB, error) {

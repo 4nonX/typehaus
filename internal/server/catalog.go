@@ -128,6 +128,7 @@ func (s *Server) catalogIndex(ctx context.Context) ([]*catalogEntry, error) {
 		return nil, err
 	}
 	c.set(entries, time.Now())
+	go s.applyCatalogClasses(entries)
 	if b, err := json.Marshal(map[string]any{"loaded": c.loaded.Unix(), "entries": entries}); err == nil {
 		os.MkdirAll(filepath.Dir(s.catalogFile()), 0o750)
 		os.WriteFile(s.catalogFile(), b, 0o640)
@@ -663,6 +664,9 @@ func (s *Server) importCatalogFamily(ctx context.Context, id string, u *authUser
 	}
 	res.Status = "added"
 	s.db.Exec(`UPDATE fonts SET catalog_ref = ? WHERE id IN (`+placeholders(len(ids))+`)`, append([]any{e.ID}, int64Args(ids)...)...)
+	if catalogClasses[e.Category] {
+		s.db.Exec(`UPDATE fonts SET class = ? WHERE id IN (`+placeholders(len(ids))+`)`, append([]any{e.Category}, int64Args(ids)...)...)
+	}
 	if _, _, err := s.autoLicense(ids); err != nil {
 		s.log.Warn("catalog import: license detection", "err", err)
 	}

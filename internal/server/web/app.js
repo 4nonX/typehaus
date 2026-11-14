@@ -70,6 +70,7 @@ function setView(v) {
   try { localStorage.setItem('typehaus.view', v); } catch {}
 }
 const PANGRAM = 'Sphinx of black quartz, judge my vow.';
+const ICON_FILTER = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h12M4.5 8h7M7 12h2"/></svg>';
 const VIEW_ICONS = {
   grid: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
   list: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M5 4h9M5 8h9M5 12h9"/><circle cx="2.3" cy="4" r=".6" fill="currentColor"/><circle cx="2.3" cy="8" r=".6" fill="currentColor"/><circle cx="2.3" cy="12" r=".6" fill="currentColor"/></svg>',
@@ -93,6 +94,7 @@ const S = {
   lib: {
     fonts: [], collections: [], licenses: [], loaded: false,
     q: '', coll: 'all', preview: '', size: savedSize(), expanded: new Set(), selected: new Set(),
+    filters: {}, filtersOpen: false, filterMore: new Set(),
   },
 };
 
@@ -400,6 +402,93 @@ function filteredFonts() {
 }
 const matchesQuery = (f, q) => `${f.family} ${f.full_name} ${f.postscript_name} ${f.designer} ${f.manufacturer}`.toLowerCase().includes(q);
 
+// ---- Library filters ----------------------------------------------------------
+// Faceted, on families: within a group any chosen option matches (Features:
+// all of them), across groups all must. Counts show what each option would
+// leave, given the other groups.
+const CLASS_LABEL = { 'sans-serif': 'Sans serif', serif: 'Serif', 'slab-serif': 'Slab serif', monospace: 'Monospace', handwriting: 'Handwriting & script', display: 'Display', symbol: 'Symbol', '': 'Unclassified' };
+const famClass = (fam) => {
+  const n = {};
+  for (const f of fam.faces) if (f.class) n[f.class] = (n[f.class] || 0) + 1;
+  return Object.keys(n).sort((a, b) => n[b] - n[a])[0] || '';
+};
+const fontType = (f) => f.kind === 'type1' ? 'type1' : ['winfnt', 'pcf', 'bdf'].includes(f.kind) ? 'bitmap' : f.format === 'otf' ? 'otf' : f.format === 'ttc' ? 'ttc' : 'ttf';
+const uniq = (a) => [...new Set(a)];
+const FILTER_GROUPS = [
+  { key: 'status', label: 'Status', opts: (fam) => [fam.active ? 'on' : 'off', ...(fam.required ? ['required'] : [])],
+    name: (o) => ({ on: 'Active for me', off: 'Not active', required: 'Installed by a collection' })[o], order: ['on', 'off', 'required'] },
+  { key: 'class', label: 'Classification', opts: (fam) => [famClass(fam)], name: (o) => CLASS_LABEL[o] || o, order: Object.keys(CLASS_LABEL) },
+  { key: 'feat', label: 'Features', all: true, opts: (fam) => [
+      ...(fam.faces.some((f) => f.variable) ? ['variable'] : []), ...(fam.faces.some((f) => f.italic) ? ['italic'] : []),
+      ...(fam.faces.some((f) => f.width && f.width < 5) ? ['condensed'] : []), ...(fam.faces.some((f) => f.width > 5) ? ['expanded'] : [])],
+    name: (o) => ({ variable: 'Variable', italic: 'Has italics', condensed: 'Condensed', expanded: 'Expanded' })[o], order: ['variable', 'italic', 'condensed', 'expanded'] },
+  { key: 'type', label: 'Format', opts: (fam) => uniq(fam.faces.map(fontType)),
+    name: (o) => ({ otf: 'OpenType (PostScript)', ttf: 'TrueType', ttc: 'Collection', type1: 'Type 1', bitmap: 'Bitmap' })[o], order: ['otf', 'ttf', 'ttc', 'type1', 'bitmap'] },
+  { key: 'foundry', label: 'Foundry', many: true, opts: (fam) => uniq(fam.faces.map((f) => (f.manufacturer || '').trim() || '?')),
+    name: (o) => o === '?' ? 'Not stated' : o },
+  { key: 'license', label: 'License', many: true, opts: (fam) => uniq(fam.faces.map((f) => f.license_id == null ? 'none' : String(f.license_id))),
+    name: (o) => o === 'none' ? 'No license' : (S.lib.licenses.find((l) => String(l.id) === o) || { name: 'License ' + o }).name },
+];
+const famMatches = (fam, except) => FILTER_GROUPS.every((g) => {
+  const want = S.lib.filters[g.key];
+  if (g.key === except || !want || !want.size) return true;
+  const has = g.opts(fam);
+  return g.all ? [...want].every((o) => has.includes(o)) : has.some((o) => want.has(o));
+});
+const activeFilters = () => FILTER_GROUPS.reduce((n, g) => n + (S.lib.filters[g.key]?.size || 0), 0);
+// the families the library shows: collection and search, then the filters
+const shownFamilies = () => groupFamilies(filteredFonts()).filter((fam) => famMatches(fam));
+
+function drawFilters() {
+  const L = S.lib;
+  const panel = $('#filters'), chips = $('#factive'), btn = $('#ftoggle');
+  if (!panel) return;
+  const n = activeFilters();
+  btn.innerHTML = `${ICON_FILTER} Filters${n ? ` <span class="fcount">${n}</span>` : ''}`;
+  btn.classList.toggle('on', L.filtersOpen);
+  btn.setAttribute('aria-expanded', L.filtersOpen);
+  const scope = groupFamilies(filteredFonts());
+  panel.hidden = !L.filtersOpen;
+  if (L.filtersOpen) {
+    panel.innerHTML = FILTER_GROUPS.map((g) => {
+      const want = L.filters[g.key] || new Set();
+      const count = new Map();
+      for (const fam of scope) if (famMatches(fam, g.key)) for (const o of g.opts(fam)) count.set(o, (count.get(o) || 0) + 1);
+      for (const o of want) if (!count.has(o)) count.set(o, 0);
+      let opts = [...count.keys()];
+      opts = g.order ? g.order.filter((o) => count.has(o)) : opts.sort((a, b) => (count.get(b) - count.get(a)) || g.name(a).localeCompare(g.name(b)));
+      if (!opts.length) return '';
+      const limit = g.many && !L.filterMore.has(g.key) ? 8 : Infinity;
+      const shown = opts.filter((o, i) => i < limit || want.has(o));
+      return `<div class="fgroup"><span class="flabel">${g.label}</span><span class="fopts">${shown.map((o) => `<button type="button" class="fchip ${want.has(o) ? 'on' : ''}" data-g="${g.key}" data-o="${esc(o)}" aria-pressed="${want.has(o)}" ${!count.get(o) && !want.has(o) ? 'disabled' : ''}>${esc(g.name(o))} <span class="n">${count.get(o)}</span></button>`).join('')}${
+        opts.length > shown.length ? `<button type="button" class="fmore" data-more="${g.key}">${opts.length - shown.length} more…</button>` : ''}</span></div>`;
+    }).join('') + (n ? '<div class="fgroup"><span class="flabel"></span><button type="button" class="btn sm" data-fclear>Clear filters</button></div>' : '');
+  } else panel.innerHTML = '';
+  // what's on, also while the panel is closed
+  const on = FILTER_GROUPS.flatMap((g) => [...(L.filters[g.key] || [])].map((o) => ({ g, o })));
+  chips.hidden = !on.length || L.filtersOpen;
+  chips.innerHTML = on.map(({ g, o }) => `<span class="fchip on">${esc(g.label)}: ${esc(g.name(o))}<button type="button" class="chip-x" data-g="${g.key}" data-o="${esc(o)}" aria-label="Remove">×</button></span>`).join('') +
+    (on.length ? '<button type="button" class="fmore" data-fclear>Clear</button>' : '');
+}
+
+function wireFilters(page) {
+  const L = S.lib;
+  const changed = () => { L.shown = 0; L.selected.clear(); drawFilters(); drawFamilies(); };
+  $('#ftoggle', page).onclick = () => { L.filtersOpen = !L.filtersOpen; drawFilters(); };
+  for (const box of [$('#filters', page), $('#factive', page)]) {
+    box.onclick = (e) => {
+      const more = e.target.closest('[data-more]');
+      if (more) { L.filterMore.add(more.dataset.more); drawFilters(); return; }
+      if (e.target.closest('[data-fclear]')) { L.filters = {}; changed(); return; }
+      const b = e.target.closest('[data-g]');
+      if (!b) return;
+      const set = L.filters[b.dataset.g] || (L.filters[b.dataset.g] = new Set());
+      if (set.has(b.dataset.o)) set.delete(b.dataset.o); else set.add(b.dataset.o);
+      changed();
+    };
+  }
+}
+
 async function renderLibrary(page) {
   const L = S.lib;
   const hq = new URLSearchParams(location.hash.split('?')[1] || '').get('q');
@@ -433,6 +522,7 @@ async function renderLibrary(page) {
           <input type="file" id="file" multiple hidden></div>` : ''}
         <div class="toolbar">
           <input type="search" id="q" placeholder="Search fonts…  /" value="${esc(L.q)}" title="Search (press / to jump here, Esc to clear)">
+          <button class="btn sm ftoggle" id="ftoggle" aria-controls="filters"></button>
           <span class="pvctl">
             <input type="text" class="preview-text" id="pv" placeholder="Type to preview…" value="${esc(L.preview)}" title="Preview text (Esc clears)">
             <select id="pvs" aria-label="Sample text" title="Sample texts"><option value="">Samples</option>${SAMPLES.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('')}</select>
@@ -444,6 +534,8 @@ async function renderLibrary(page) {
           <button class="btn sm" id="expandall" ${S.view === 'grid' ? 'hidden' : ''}>${L.expanded.size ? 'Collapse all' : 'Expand all'}</button>
           ${viewToggle()}
         </div>
+        <div id="filters" class="filters" hidden></div>
+        <div id="factive" class="factive" hidden></div>
         <div id="allrow"></div>
         <div id="bulk"></div>
         <div id="families"></div>
@@ -451,10 +543,12 @@ async function renderLibrary(page) {
     </div>`;
 
   $('#reqfont', page).onclick = (e) => { e.preventDefault(); requestFont(); };
+  wireFilters(page);
+  drawFilters();
   $$('.side a[data-coll]', page).forEach((a) => a.onclick = (e) => { e.preventDefault(); L.coll = a.dataset.coll; L.selected.clear(); L.shown = 0; renderLibrary(page); });
   const q = $('#q', page);
-  q.oninput = () => { L.q = q.value; L.shown = 0; drawFamilies(); };
-  escClears(q, () => { L.q = ''; L.shown = 0; drawFamilies(); });
+  q.oninput = () => { L.q = q.value; L.shown = 0; drawFilters(); drawFamilies(); };
+  escClears(q, () => { L.q = ''; L.shown = 0; drawFilters(); drawFamilies(); });
   const pv = $('#pv', page);
   const setPreview = (t) => { L.preview = t; $$('.specimen:not(.nopreview)', page).forEach((el) => el.textContent = L.preview || el.dataset.def); };
   pv.oninput = () => setPreview(pv.value);
@@ -488,7 +582,7 @@ async function renderLibrary(page) {
   wireViewToggle(page, () => { $('#expandall', page).hidden = S.view === 'grid'; drawFamilies(); });
   $('#expandall', page).onclick = () => {
     if (L.expanded.size) L.expanded.clear();
-    else groupFamilies(filteredFonts()).forEach((fam) => L.expanded.add(fam.name));
+    else shownFamilies().forEach((fam) => L.expanded.add(fam.name));
     renderLibrary(page);
   };
   if (isAdmin) setupUpload(page);
@@ -499,8 +593,14 @@ function drawFamilies() {
   const L = S.lib;
   const box = $('#families');
   if (!box) return;
-  const fams = groupFamilies(filteredFonts());
+  const fams = shownFamilies();
   drawAllRow();
+  if (!fams.length && activeFilters() && groupFamilies(filteredFonts()).length) {
+    box.innerHTML = `<div class="empty"><div class="big">No family matches these filters.</div><button class="btn" data-fclear>Clear filters</button></div>`;
+    $('[data-fclear]', box).onclick = () => { L.filters = {}; L.shown = 0; drawFilters(); drawFamilies(); };
+    drawBulk();
+    return;
+  }
   if (!fams.length) {
     const q = L.q.trim();
     if (q && L.fonts.length) {
@@ -830,15 +930,15 @@ const SAMPLES = [
 ];
 
 // One switch for every font in the current view (search and collection
-// applied; with "All fonts" and no search that is the whole library). Fonts
+// and filters applied; with "All fonts" and neither, the whole library). Fonts
 // the organisation installs are always on and not touched.
 function drawAllRow() {
   const L = S.lib;
   const row = $('#allrow');
   if (!row) return;
-  const shown = filteredFonts();
+  const shown = shownFamilies().flatMap((fam) => fam.faces);
   if (!shown.length) { row.innerHTML = ''; return; }
-  const whole = String(L.coll) === 'all' && !L.q.trim();
+  const whole = String(L.coll) === 'all' && !L.q.trim() && !activeFilters();
   const own = shown.filter((f) => f.activated && !f.required);
   const req = shown.filter((f) => f.required).length;
   const off = shown.filter((f) => !isOn(f));
@@ -846,7 +946,7 @@ function drawAllRow() {
   const shownFams = groupFamilies(shown);
   const famsOn = shownFams.filter((fm) => fm.faces.every(isOn)).length;
   const famsPart = shownFams.filter((fm) => fm.faces.some(isOn) && !fm.faces.every(isOn)).length;
-  const label = whole ? 'All fonts' : String(L.coll) === 'active' && !L.q.trim() ? 'All fonts active for me' : `All ${plural(shownFams.length, 'family', 'families')} shown`;
+  const label = whole ? 'All fonts' : String(L.coll) === 'active' && !L.q.trim() && !activeFilters() ? 'All fonts active for me' : `All ${plural(shownFams.length, 'family', 'families')} shown`;
   row.innerHTML = `<div class="allrow${S.me.is_admin ? " sel" : ""}">
     <label class="toggle" title="${off.length ? 'Switch on' : 'Switch off'} ${whole ? 'every font in the library' : 'every font in this view'}"><input type="checkbox" id="allon" ${off.length ? '' : 'checked'}><span></span></label>
     <b>${label}</b>

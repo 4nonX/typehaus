@@ -3,6 +3,7 @@ package server
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -63,17 +64,22 @@ type fontRow struct {
 	FamilyAuto     string   `json:"family_auto"`  // family as detected from the file
 	StyleAuto      string   `json:"style_auto"`   // style as detected from the file
 	NamesManual    bool     `json:"names_manual"` // family/style set by hand
+	// Class: sans-serif, serif, slab-serif, monospace, handwriting, display,
+	// symbol – or "" when neither the font nor the free catalog says.
+	Class    string `json:"class"`
+	Variable bool   `json:"variable"` // has variation axes
+	Width    int    `json:"width"`    // OS/2 width class, 1–9, 5 normal
 }
 
 const fontCols = `f.id, f.sha256, f.face_index, f.filename, f.format, f.size, f.family, f.style, f.full_name,
 	f.postscript_name, f.version, f.designer, f.manufacturer, f.weight, f.italic, f.fs_type, f.license_id, f.created_at,
-	f.family_auto, f.style_auto, f.names_manual`
+	f.family_auto, f.style_auto, f.names_manual, f.class, f.variable, f.width`
 
 func scanFont(sc interface{ Scan(...any) error }, f *fontRow) error {
 	var lic sql.NullInt64
 	err := sc.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 		&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
-		&f.FamilyAuto, &f.StyleAuto, &f.NamesManual)
+		&f.FamilyAuto, &f.StyleAuto, &f.NamesManual, &f.Class, &f.Variable, &f.Width)
 	if lic.Valid {
 		f.LicenseID = &lic.Int64
 	}
@@ -113,7 +119,7 @@ func (s *Server) handleListFonts(w http.ResponseWriter, r *http.Request, u *auth
 		var lic sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 			&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
-			&f.FamilyAuto, &f.StyleAuto, &f.NamesManual,
+			&f.FamilyAuto, &f.StyleAuto, &f.NamesManual, &f.Class, &f.Variable, &f.Width,
 			&f.Activated, &f.Conflict, &f.Kind, &f.Platforms, &f.SourceFormat); err != nil {
 			rows.Close()
 			s.internalErr(w, err)
@@ -176,7 +182,7 @@ func (s *Server) handleGetFont(w http.ResponseWriter, r *http.Request, u *authUs
 	var lic sql.NullInt64
 	err := row.Scan(&f.ID, &f.SHA256, &f.FaceIndex, &f.Filename, &f.Format, &f.Size, &f.Family, &f.Style, &f.FullName,
 		&f.PostScriptName, &f.Version, &f.Designer, &f.Manufacturer, &f.Weight, &f.Italic, &f.FSType, &lic, &f.CreatedAt,
-		&f.FamilyAuto, &f.StyleAuto, &f.NamesManual,
+		&f.FamilyAuto, &f.StyleAuto, &f.NamesManual, &f.Class, &f.Variable, &f.Width,
 		&copyright, &licText, &licURL, &vendorID, &trademark)
 	if err != nil {
 		writeErr(w, 404, "font not found")
@@ -683,11 +689,13 @@ func (s *Server) storeFont(uploadName string, df fontmeta.File, extras map[strin
 		}
 		r, err := tx.Exec(`INSERT INTO fonts (sha256, face_index, filename, format, size, family, style, full_name, postscript_name,
 			version, designer, manufacturer, copyright, license_text, license_url, weight, italic, fs_type, uploaded_by, created_at,
-			kind, platforms, source_format, extras, vendor_id, trademark, meta_checked, fingerprint, names_v, family_auto, style_auto)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,1,?,?)`,
+			kind, platforms, source_format, extras, vendor_id, trademark, meta_checked, fingerprint, names_v, family_auto, style_auto,
+			class, variable, width, class_v)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,1,?,?,?,?,?,1)`,
 			sha, i, clean, df.Format, len(df.Data), f.Family, f.Style, f.FullName, f.PostScriptName,
 			f.Version, f.Designer, f.Manufacturer, f.Copyright, f.License, f.LicenseURL, f.Weight, f.Italic, f.FSType, u.ID, now(),
-			string(df.Kind), platforms, df.Source, string(exJSON), f.VendorID, f.Trademark, f.Fingerprint, f.Family, f.Style)
+			string(df.Kind), platforms, df.Source, string(exJSON), f.VendorID, f.Trademark, f.Fingerprint, f.Family, f.Style,
+			f.Class, f.Variable, cmp.Or(f.Width, 5))
 		if err != nil {
 			tx.Rollback()
 			res.Status, res.Message = "error", "database error"

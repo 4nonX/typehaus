@@ -52,3 +52,35 @@ func TestRejects(t *testing.T) {
 		t.Fatal("expected error for truncated ttc")
 	}
 }
+
+func TestClassify(t *testing.T) {
+	os2 := func(class byte, panose ...byte) []byte {
+		b := make([]byte, 64)
+		b[30] = class
+		copy(b[32:], panose)
+		return b
+	}
+	for want, t2 := range map[string][]byte{
+		"serif":       os2(1),
+		"slab-serif":  os2(5),
+		"sans-serif":  os2(8),
+		"display":     os2(9),
+		"handwriting": os2(10),
+		"symbol":      os2(12),
+		"monospace":   os2(5, 0, 15, 4, 9), // class says slab, PANOSE monospaced (FreeMono)
+		"":            os2(0),
+	} {
+		if got := classify(t2); got != want {
+			t.Errorf("%v: got %q, want %q", t2[30:36], got, want)
+		}
+	}
+	// PANOSE when the family class is unset
+	for want, p := range map[string][]byte{
+		"sans-serif": {2, 11}, "serif": {2, 2}, "slab-serif": {2, 6},
+		"handwriting": {3}, "display": {4}, "symbol": {5},
+	} {
+		if got := classify(os2(0, p...)); got != want {
+			t.Errorf("PANOSE %v: got %q, want %q", p, got, want)
+		}
+	}
+}

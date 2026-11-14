@@ -6,6 +6,10 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Added
+- **Filters in the library.** A *Filters* panel next to the search narrows the library by status (active for me, not active, installed by a collection), classification (sans serif, serif, slab serif, monospace, handwriting & script, display, symbol), features (variable, has italics, condensed, expanded), format (OpenType, TrueType, collection, Type 1, bitmap), foundry and license. Each option shows how many families it would leave; chosen filters stay visible as chips. Filters work in list and grid view and on *switch all shown on/off*.
+- **Font classification.** typehaus reads each font's design classification from the font itself (OS/2 family class, PANOSE, fixed pitch), whether it is variable, and its width. Many fonts don't declare a classification; for those whose family is in the free catalog, its curated category fills in – and for fonts imported from the catalog, it wins. Fonts already in the library are read once, in the background, after updating. API: `class`, `variable` and `width` on fonts.
+
 ## [1.1.4] - 2026-11-14
 
 ### Security
