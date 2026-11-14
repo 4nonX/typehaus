@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-11-14
+
 ### Security
 - **Fuzzing.** Every parser that reads uploaded or outside bytes – all font formats, the OpenType reader, the web-font encoders, Type 1 metrics, zip archives, the Aspose and Affinity answers – has a Go fuzz target, run in CI on every push and nightly. Inputs it once broke on are kept as regression tests.
 - **Zip uploads are limited as a whole.** An archive may unpack to at most twice the upload limit (`TYPEHAUS_MAX_UPLOAD_MB`) and hold at most 10,000 files; before, only each file was limited, so a small archive of many highly compressible files could fill the server's memory. Sizes are checked as entries are read, not taken from the archive's own claims.
