@@ -108,6 +108,7 @@ const ROUTES = {
   requests: { title: 'Requests', render: renderRequests, admin: true },
   activity: { title: 'Activity', render: renderActivity, admin: true },
   integrations: { title: 'Integrations', render: renderIntegrations, admin: true },
+  layout: { title: 'Layout', render: renderLayout, hidden: true }, // reached from the library
 };
 
 function route() {
@@ -152,7 +153,7 @@ function render() {
   const def = ROUTES[r];
   if (def.admin && !S.me.is_admin) { location.hash = '#/library'; return; }
   const nav = Object.entries(ROUTES)
-    .filter(([, d]) => !d.admin || S.me.is_admin)
+    .filter(([, d]) => !d.hidden && (!d.admin || S.me.is_admin))
     .map(([k, d]) => `<a href="#/${k}" class="${k === r ? 'active' : ''}">${d.title}</a>`).join('');
   app.innerHTML = `
     <div class="shell">
@@ -510,6 +511,8 @@ async function renderLibrary(page) {
         <h4>Collections</h4>
         ${L.collections.map((c) => `<a href="#" data-coll="${c.id}" class="${String(L.coll) === String(c.id) ? 'active' : ''}">${esc(c.name)} <span class="n">${famCount(inCollection(c.id))}</span></a>`).join('') || '<p class="muted small" style="padding:0 10px">None yet</p>'}
         ${isAdmin ? '<p style="padding:0 10px"><a href="#/collections" class="small" style="padding:0">Manage collections →</a></p>' : ''}
+        <h4>Try out</h4>
+        <a href="#/layout">Layout sandbox</a>
         <h4>Missing a font?</h4>
         <a href="#/find">Find free fonts</a>
         <a href="#/find?tab=identify">Identify a font from an image</a>
@@ -649,6 +652,7 @@ function drawFamilies() {
         <span class="spacer"></span>
         <span class="meta small">${esc(fam.rep.manufacturer || fam.rep.designer || '')}</span>
         <button class="expand info" title="Details and license">Info</button>
+        ${fam.faces.some((f) => !f.kind || f.kind === 'sfnt') ? `<button class="expand" data-tryfam="${esc(fam.name)}" title="Set this family in the layout sandbox">Layout</button>` : ''}
         ${namedOut(lic) ? `<button class="expand" data-askfont="${esc(fam.name)}" title="${esc(NAMED_TIP)}">Request</button>`
           : S.me.downloads ? `<button class="expand dl" title="Download ${fam.faces.length > 1 ? 'all styles as ZIP' : 'the font file'} to install it yourself">Download</button>` : ''}
         <button class="expand">${open ? 'Hide styles ▴' : 'Styles ▾'}</button>
@@ -2773,5 +2777,330 @@ async function renderActivity(page) {
   $('#more', page).onclick = () => more().catch(fail);
   await more();
 }
+
+// ---------------------------------------------------------------------------
+// layout sandbox: try library fonts together in an editorial page
+// ---------------------------------------------------------------------------
+// Blocks of text, each set in a library font, with size, leading, tracking,
+// alignment, capitals and columns. Kept per browser; a share link carries the
+// whole layout (fonts by library id, so it works for colleagues on the same
+// server, with the fonts they may see).
+
+const LAYOUT_KEY = 'typehaus.layout';
+const LAYOUT_ROLES = {
+  kicker: { label: 'Kicker', size: 11, lh: 1.3, track: 0.14, upper: true, want: ['sans-serif', 'slab-serif', 'serif'], weight: 600 },
+  headline: { label: 'Headline', size: 46, lh: 1.04, track: -0.01, want: ['serif', 'display', 'sans-serif'], weight: 700 },
+  standfirst: { label: 'Standfirst', size: 17, lh: 1.4, want: ['serif', 'sans-serif'], weight: 400 },
+  body: { label: 'Body text', size: 10.5, lh: 1.55, want: ['serif', 'sans-serif'], weight: 400, cols: 2 },
+  quote: { label: 'Pull quote', size: 24, lh: 1.2, want: ['serif', 'display', 'sans-serif'], weight: 400, italic: true },
+  caption: { label: 'Caption', size: 8.5, lh: 1.4, track: 0.01, want: ['sans-serif', 'serif'], weight: 400 },
+};
+const LAYOUT_TEXT = {
+  kicker: 'Typography',
+  headline: 'The quiet work of letters',
+  standfirst: 'Good type rarely asks for attention. It sets the pace of reading, carries the tone of a page and holds a brand together – long before anyone notices a single letterform.',
+  body: 'Every page is a set of decisions. The size of the headline against the width of the column, the space between lines, the weight that tells a reader where to look first. Change one and the others move with it, which is why typefaces are best judged together, on a page, and not one at a time in a list.\n\nA serif that looks calm in a specimen can turn heavy in a long paragraph; a sans that sparkles at display sizes may tire the eye at nine points. Setting a few real lines side by side answers more questions than any amount of scrolling. Try the body text at its actual size, then change only the headline, and watch how the whole page shifts its voice.',
+  quote: '“Typefaces are best judged together, on a page.”',
+  caption: 'Set in the typehaus layout sandbox. Fonts from your library; change any block on the right.',
+};
+const LAYOUT_TEMPLATES = {
+  editorial: { name: 'Editorial', roles: ['kicker', 'headline', 'standfirst', 'body', 'quote', 'caption'] },
+  pairing: { name: 'Headline & text', roles: ['headline', 'body'] },
+  poster: { name: 'Poster', roles: ['kicker', 'headline', 'caption'], tweak: { headline: { size: 88, lh: 0.95 } } },
+};
+
+// faces the browser can show (OpenType/TrueType), grouped by family
+function layoutFamilies() {
+  const fams = groupFamilies(S.lib.fonts.filter((f) => !f.kind || f.kind === 'sfnt'));
+  fams.sort((a, b) => a.name.localeCompare(b.name));
+  return fams;
+}
+// a face for a role: a family of a wanted class, the weight nearest the role's
+function layoutPick(role, avoid = new Set()) {
+  const R = LAYOUT_ROLES[role];
+  const fams = layoutFamilies();
+  const text = ['standfirst', 'body', 'caption'].includes(role);
+  const score = (fam) => {
+    const c = R.want.indexOf(famClass(fam));
+    let n = (c < 0 ? 6 : c) * 10;
+    if (avoid.has(famKey(fam.name))) n += 15; // another family than the headline's
+    const display = /display|poster|headline|titling|deck/i.test(fam.name);
+    if (text && display) n += 25; // text needs a text face
+    if (!text && display) n -= 4;
+    return n - Math.min(fam.faces.length, 6); // families with more styles are made for text
+  };
+  const ranked = [...fams].sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name));
+  const fam = ranked[0];
+  if (!fam) return null;
+  return layoutFace(fam, R.weight, !!R.italic).id;
+}
+function layoutFace(fam, weight, italic) {
+  return [...fam.faces].sort((a, b) => (Math.abs(a.weight - weight) - Math.abs(b.weight - weight)) || ((a.italic !== italic) - (b.italic !== italic)))[0];
+}
+function layoutBlock(role, avoid) {
+  const R = LAYOUT_ROLES[role];
+  return { id: Math.random().toString(36).slice(2, 9), role, text: LAYOUT_TEXT[role], font: layoutPick(role, avoid),
+    size: R.size, lh: R.lh, track: R.track || 0, align: 'left', upper: !!R.upper, cols: R.cols || 1 };
+}
+function layoutFromTemplate(key) {
+  const t = LAYOUT_TEMPLATES[key];
+  const used = new Set();
+  const blocks = t.roles.map((role) => {
+    const b = layoutBlock(role, used);
+    Object.assign(b, t.tweak?.[role] || {});
+    const f = S.lib.fonts.find((x) => x.id === b.font);
+    if (f && role === 'headline') used.add(famKey(f.family));
+    return b;
+  });
+  return { v: 1, template: key, width: 680, dark: false, blocks };
+}
+function layoutLoad() {
+  const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  const shared = params.get('s');
+  if (shared) {
+    try {
+      const st = JSON.parse(decodeURIComponent(escape(atob(shared.replace(/-/g, '+').replace(/_/g, '/')))));
+      if (st && Array.isArray(st.blocks)) return st;
+    } catch { toast('This layout link is damaged', true); }
+  }
+  try {
+    const st = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    if (st && Array.isArray(st.blocks) && st.blocks.length) return st;
+  } catch {}
+  return layoutFromTemplate('editorial');
+}
+function layoutSave(st) {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(st)); } catch {}
+}
+function layoutLink(st) {
+  const raw = btoa(unescape(encodeURIComponent(JSON.stringify(st)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${location.origin}${location.pathname}#/layout?s=${raw}`;
+}
+
+async function renderLayout(page) {
+  if (!S.lib.loaded) await loadLibrary();
+  const st = layoutLoad();
+  const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  let sel = st.blocks[0]?.id;
+  // "Layout" on a family: set it in the headline (or the first block)
+  const tryFam = params.get('family');
+  if (tryFam) {
+    const fam = layoutFamilies().find((x) => famKey(x.name) === famKey(tryFam));
+    const target = st.blocks.find((b) => b.role === 'headline') || st.blocks[0];
+    if (fam && target) {
+      target.font = layoutFace(fam, LAYOUT_ROLES[target.role]?.weight || 400, false).id;
+      sel = target.id;
+    }
+  }
+  if (tryFam || params.get('s')) history.replaceState(null, '', '#/layout');
+  layoutSave(st);
+  const fams = layoutFamilies();
+  const fontOf = (b) => S.lib.fonts.find((f) => f.id === b.font);
+
+  page.innerHTML = `
+    <div class="layout-page">
+      <div class="lay-head">
+        <div><h1>Layout</h1><p class="muted small" style="margin:2px 0 0">Try library fonts together on a page. Click a block to edit its text; set it on the right.</p></div>
+        <div class="lay-tools">
+          <select id="lay-tpl" title="Start again from a template"><option value="">Templates…</option>${Object.entries(LAYOUT_TEMPLATES).map(([k, t]) => `<option value="${k}">${esc(t.name)}</option>`).join('')}</select>
+          <button class="btn sm" id="lay-dark" aria-pressed="${!!st.dark}">${st.dark ? 'Light paper' : 'Dark paper'}</button>
+          <button class="btn sm" id="lay-share" title="A link that opens this layout – for anyone on this server">Copy link</button>
+          <button class="btn sm" id="lay-print" title="Print or save as PDF">Print</button>
+          <button class="btn sm primary" id="lay-activate" title="Switch on every font this layout uses, on your computers">Switch on fonts used</button>
+        </div>
+      </div>
+      <div class="lay-body">
+        <div class="lay-stage"><div class="lay-paper ${st.dark ? 'dark' : ''}" id="lay-paper" style="--w:${st.width}px"></div></div>
+        <aside class="lay-panel card" id="lay-panel"></aside>
+      </div>
+    </div>`;
+  const paper = $('#lay-paper', page), panel = $('#lay-panel', page);
+  let saveT;
+  const save = () => { clearTimeout(saveT); saveT = setTimeout(() => layoutSave(st), 300); };
+
+  const styleBlock = (el, b) => {
+    el.style.fontSize = `${b.size}pt`;
+    el.style.lineHeight = b.lh;
+    el.style.letterSpacing = `${b.track}em`;
+    el.style.textAlign = b.align;
+    el.style.textTransform = b.upper ? 'uppercase' : 'none';
+    el.style.columnCount = b.cols;
+    const f = fontOf(b);
+    el.classList.toggle('missing', !f);
+    el.title = f ? `${f.family} ${f.style}` : 'This font is not in your library (or you can\'t see it)';
+    if (!f) { el.style.fontFamily = ''; return; }
+    el.style.fontWeight = '';
+    loadFace(f.id).then((fam) => { if (typeof fam === 'string') el.style.fontFamily = `"${fam}", "Adobe NotDef", serif`; });
+  };
+  const drawPaper = () => {
+    paper.innerHTML = st.blocks.map((b) => `<div class="lblock ${b.id === sel ? 'sel' : ''}" data-id="${b.id}" data-role="${esc(LAYOUT_ROLES[b.role]?.label || b.role)}" contenteditable="plaintext-only" spellcheck="false"></div>`).join('') +
+      (st.blocks.length ? '' : '<p class="muted">No blocks. Add one on the right.</p>');
+    for (const el of $$('.lblock', paper)) {
+      const b = st.blocks.find((x) => x.id === el.dataset.id);
+      el.textContent = b.text;
+      styleBlock(el, b);
+      el.onfocus = () => { if (sel !== b.id) { sel = b.id; $$('.lblock', paper).forEach((x) => x.classList.toggle('sel', x === el)); drawPanel(); } };
+      el.oninput = () => { b.text = el.innerText; save(); };
+    }
+  };
+  const famOptions = fams.map((fam) => `<option value="${esc(fam.name)}"></option>`).join('');
+  const drawPanel = () => {
+    const b = st.blocks.find((x) => x.id === sel);
+    if (!b) { panel.innerHTML = `<p class="muted small">Pick a block on the page.</p>${addRow()}`; wirePanel(); return; }
+    const f = fontOf(b);
+    const fam = f && fams.find((x) => x.faces.some((y) => y.id === f.id));
+    const i = st.blocks.indexOf(b);
+    panel.innerHTML = `
+      <div class="lay-row"><label class="field">Block<select data-k="role">${Object.entries(LAYOUT_ROLES).map(([k, r]) => `<option value="${k}" ${k === b.role ? 'selected' : ''}>${r.label}</option>`).join('')}</select></label></div>
+      <div class="lay-row"><label class="field">Font family<input type="text" list="lay-fams" data-k="family" value="${esc(fam?.name || '')}" placeholder="${f ? '' : 'Not available – pick a family'}" autocomplete="off"></label>
+        <datalist id="lay-fams">${famOptions}</datalist></div>
+      <div class="lay-row"><label class="field">Style<select data-k="font" ${fam ? '' : 'disabled'}>${fam ? fam.faces.slice().sort((a, b2) => (a.italic - b2.italic) || (a.weight - b2.weight)).map((x) => `<option value="${x.id}" ${x.id === b.font ? 'selected' : ''}>${esc(x.style)}</option>`).join('') : ''}</select></label></div>
+      ${fam && !fam.faces.some(isOn) ? `<p class="small muted" style="margin:-4px 0 8px">Not switched on for you – fine here; <a href="#" data-act-fam>switch it on</a> to use it in your apps.</p>` : ''}
+      ${slider('Size', 'size', b.size, 6, 140, 0.5, 'pt')}
+      ${slider('Line height', 'lh', b.lh, 0.8, 2.2, 0.01, '')}
+      ${slider('Letter spacing', 'track', b.track, -0.08, 0.4, 0.005, 'em')}
+      <div class="lay-row"><span class="flabel">Alignment</span><span class="segbtn">${['left', 'center', 'right', 'justify'].map((a) => `<button type="button" data-align="${a}" class="${b.align === a ? 'on' : ''}" title="${a}">${ALIGN_ICONS[a]}</button>`).join('')}</span></div>
+      <div class="lay-row lay-inline">
+        <label class="check"><input type="checkbox" data-k="upper" ${b.upper ? 'checked' : ''}> Capitals</label>
+        <span class="flabel" style="margin-left:auto">Columns</span><span class="segbtn">${[1, 2, 3].map((n) => `<button type="button" data-cols="${n}" class="${n === b.cols ? 'on' : ''}">${n}</button>`).join('')}</span>
+      </div>
+      <div class="lay-row lay-inline">
+        <button class="btn sm" data-move="-1" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button>
+        <button class="btn sm" data-move="1" ${i === st.blocks.length - 1 ? 'disabled' : ''} title="Move down">↓</button>
+        <button class="btn sm" data-dup>Duplicate</button>
+        <button class="btn sm danger" data-del>Remove</button>
+      </div>
+      <hr>
+      ${slider('Page width', 'width', st.width, 360, 1100, 10, 'px', true)}
+      ${addRow()}`;
+    wirePanel();
+  };
+  const slider = (label, k, v, min, max, step, unit, page) => `<div class="lay-row"><label class="field">${label}
+    <span class="lay-slide"><input type="range" data-${page ? 'pk' : 'k'}="${k}" min="${min}" max="${max}" step="${step}" value="${v}"><input type="number" data-${page ? 'pk' : 'k'}="${k}" min="${min}" max="${max}" step="${step}" value="${v}"><span class="muted small">${unit}</span></span></label></div>`;
+  const addRow = () => `<div class="lay-row"><label class="field">Add a block<select id="lay-add"><option value="">Choose…</option>${Object.entries(LAYOUT_ROLES).map(([k, r]) => `<option value="${k}">${r.label}</option>`).join('')}</select></label></div>`;
+  const ALIGN_ICONS = {
+    left: '<svg viewBox="0 0 16 16" width="14" height="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M2 8h8M2 12h11"/></svg>',
+    center: '<svg viewBox="0 0 16 16" width="14" height="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M4 8h8M3 12h10"/></svg>',
+    right: '<svg viewBox="0 0 16 16" width="14" height="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M6 8h8M3 12h11"/></svg>',
+    justify: '<svg viewBox="0 0 16 16" width="14" height="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg>',
+  };
+  const restyle = () => {
+    const b = st.blocks.find((x) => x.id === sel);
+    const el = b && $(`.lblock[data-id="${b.id}"]`, paper);
+    if (el) styleBlock(el, b);
+    save();
+  };
+  const wirePanel = () => {
+    const b = st.blocks.find((x) => x.id === sel);
+    $$('[data-k]', panel).forEach((inp) => {
+      const k = inp.dataset.k;
+      const ev = inp.type === 'range' || inp.type === 'number' || k === 'family' ? 'input' : 'change';
+      inp.addEventListener(ev, () => {
+        if (!b) return;
+        if (k === 'family') {
+          const fam = fams.find((x) => famKey(x.name) === famKey(inp.value));
+          if (!fam) return;
+          const cur = fontOf(b);
+          b.font = layoutFace(fam, cur?.weight || LAYOUT_ROLES[b.role]?.weight || 400, !!cur?.italic).id;
+          restyle(); drawPanel(); $('[data-k="family"]', panel)?.focus(); return;
+        }
+        if (k === 'font') b.font = +inp.value;
+        else if (k === 'role') b.role = inp.value;
+        else if (k === 'upper') b.upper = inp.checked;
+        else if (k === 'cols') b.cols = +inp.value;
+        else {
+          const v = parseFloat(inp.value);
+          if (Number.isNaN(v)) return;
+          b[k] = v;
+          $$(`[data-k="${k}"]`, panel).forEach((o) => { if (o !== inp) o.value = v; });
+        }
+        if (k === 'role') { const el = $(`.lblock[data-id="${b.id}"]`, paper); if (el) el.dataset.role = LAYOUT_ROLES[b.role].label; }
+        restyle();
+      });
+    });
+    $$('[data-pk="width"]', panel).forEach((inp) => inp.addEventListener('input', () => {
+      const v = parseFloat(inp.value);
+      if (Number.isNaN(v)) return;
+      st.width = Math.min(1100, Math.max(360, v));
+      paper.style.setProperty('--w', `${st.width}px`);
+      $$('[data-pk="width"]', panel).forEach((o) => { if (o !== inp) o.value = st.width; });
+      save();
+    }));
+    $$('[data-align]', panel).forEach((btn) => btn.onclick = () => { b.align = btn.dataset.align; restyle(); drawPanel(); });
+    $$('[data-cols]', panel).forEach((btn) => btn.onclick = () => { b.cols = +btn.dataset.cols; restyle(); drawPanel(); });
+    $$('[data-move]', panel).forEach((btn) => btn.onclick = () => {
+      const i = st.blocks.indexOf(b), j = i + +btn.dataset.move;
+      [st.blocks[i], st.blocks[j]] = [st.blocks[j], st.blocks[i]];
+      save(); drawPaper(); drawPanel();
+    });
+    const dup = $('[data-dup]', panel);
+    if (dup) dup.onclick = () => {
+      const c = { ...b, id: Math.random().toString(36).slice(2, 9) };
+      st.blocks.splice(st.blocks.indexOf(b) + 1, 0, c);
+      sel = c.id; save(); drawPaper(); drawPanel();
+    };
+    const del = $('[data-del]', panel);
+    if (del) del.onclick = () => {
+      const i = st.blocks.indexOf(b);
+      st.blocks.splice(i, 1);
+      sel = st.blocks[Math.min(i, st.blocks.length - 1)]?.id;
+      save(); drawPaper(); drawPanel();
+    };
+    const act = $('[data-act-fam]', panel);
+    if (act) act.onclick = async (e) => {
+      e.preventDefault();
+      const f = fontOf(b);
+      const fam = f && fams.find((x) => x.faces.some((y) => y.id === f.id));
+      if (fam) { await setActive(fam.faces.map((x) => x.id), true); await loadLibrary(); drawPanel(); }
+    };
+    const add = $('#lay-add', panel);
+    add.onchange = () => {
+      if (!add.value) return;
+      const nb = layoutBlock(add.value, new Set());
+      const at = b ? st.blocks.indexOf(b) + 1 : st.blocks.length;
+      st.blocks.splice(at, 0, nb);
+      sel = nb.id; save(); drawPaper(); drawPanel();
+    };
+  };
+
+  $('#lay-tpl', page).onchange = (e) => {
+    const k = e.target.value;
+    if (!k) return;
+    if (!confirmReplace()) { e.target.value = ''; return; }
+    Object.assign(st, layoutFromTemplate(k), { dark: st.dark, width: st.width });
+    sel = st.blocks[0]?.id;
+    save(); drawPaper(); drawPanel(); e.target.value = '';
+  };
+  const confirmReplace = () => window.confirm('Replace this layout with the template? Your text and settings here are lost.');
+  $('#lay-dark', page).onclick = (e) => {
+    st.dark = !st.dark;
+    paper.classList.toggle('dark', st.dark);
+    e.target.textContent = st.dark ? 'Light paper' : 'Dark paper';
+    e.target.setAttribute('aria-pressed', st.dark);
+    save();
+  };
+  $('#lay-share', page).onclick = async () => {
+    const link = layoutLink(st);
+    try { await navigator.clipboard.writeText(link); toast('Link copied – it opens this layout for anyone signed in to this server'); }
+    catch { window.prompt('Copy this link:', link); }
+  };
+  $('#lay-print', page).onclick = () => window.print();
+  $('#lay-activate', page).onclick = async () => {
+    const ids = [...new Set(st.blocks.map((b) => b.font).filter((id) => S.lib.fonts.some((f) => f.id === id)))];
+    const off = ids.filter((id) => !isOn(S.lib.fonts.find((f) => f.id === id)));
+    if (!off.length) { toast(ids.length ? 'All fonts in this layout are already on' : 'This layout uses no library fonts'); return; }
+    await setActive(off, true);
+    await loadLibrary();
+    drawPanel();
+  };
+  drawPaper();
+  drawPanel();
+}
+
+// "Layout" on a library family
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tryfam]');
+  if (b) { e.preventDefault(); location.hash = `#/layout?family=${encodeURIComponent(b.dataset.tryfam)}`; }
+});
 
 boot();
