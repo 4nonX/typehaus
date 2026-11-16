@@ -6,6 +6,8 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
 ### Added
 - **Layout sandbox.** Try library fonts together on a page: kicker, headline, standfirst, body text in columns, pull quote, caption – each block in its own family and style, with size, line height, letter spacing, alignment, capitals and columns. Edit the text in place, start from a template (editorial, headline & text, poster), switch between light and dark paper, print or save as PDF. *Switch on fonts used* activates everything the page uses; *Copy link* opens the same layout for colleagues on the server, with the fonts they may see. Reached from the library's sidebar and from *Layout* on every family. Kept per browser.
 
