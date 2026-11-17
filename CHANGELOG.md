@@ -6,6 +6,9 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+### Fixed
+- **Web fonts from TrueType fonts with a broken glyph index** (found by the nightly fuzzing): a font whose `loca` table didn't match its glyph count or named an unknown index format still became a web font that browsers reject. The encoders now check the glyph index and refuse such fonts with a reason. The fuzz tests now verify every WOFF2 typehaus writes table by table against the original font.
+
 ## [1.3.0] - 2026-11-16
 
 ### Added

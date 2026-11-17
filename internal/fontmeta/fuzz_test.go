@@ -11,12 +11,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/tdewolff/font"
 )
 
@@ -203,7 +207,14 @@ func FuzzWebfont(f *testing.F) {
 			}
 		}
 		if w, err := EncodeWOFF2(b, index); err == nil {
-			if _, err := font.ToSFNT(w); err != nil {
+			// exact: every table comes back byte for byte
+			if err := woff2RoundTrip(b, index, w); err != nil {
+				t.Fatalf("WOFF2 we encoded doesn't round-trip: %v", err)
+			}
+			// and an independent decoder reads it – except for its check of
+			// untransformed loca, which reads the first glyph's bounding
+			// box as a transformed-glyf header (tdewolff/font)
+			if _, err := font.ToSFNT(w); err != nil && err.Error() != "loca: invalid value for origLength" {
 				t.Fatalf("WOFF2 we encoded doesn't decode: %v", err)
 			}
 		}
@@ -232,5 +243,113 @@ func TestDecodeNestedGzip(t *testing.T) {
 	}
 	if _, err := Decode("x.bdf.gz.gz", gz(gz(bdf))); err == nil || !strings.Contains(err.Error(), "inside a compressed file") {
 		t.Fatalf("two layers: %v", err)
+	}
+}
+
+// woff2RoundTrip decodes our WOFF2 (null transforms only, as EncodeWOFF2 writes
+// it) and compares each table with the font's: identical, except head's
+// flags bit 11, which the encoder sets.
+func woff2RoundTrip(src []byte, index int, w []byte) error {
+	_, want, err := sfntTables(src, index)
+	if err != nil {
+		return err
+	}
+	if len(w) < 48 || string(w[:4]) != "wOF2" {
+		return errors.New("no WOFF2 header")
+	}
+	n := int(binary.BigEndian.Uint16(w[12:]))
+	compLen := int(binary.BigEndian.Uint32(w[20:]))
+	if n != len(want) {
+		return fmt.Errorf("%d tables, want %d", n, len(want))
+	}
+	p := 48
+	type entry struct {
+		tag    string
+		length int
+	}
+	var dir []entry
+	for i := 0; i < n; i++ {
+		flags := w[p]
+		p++
+		tag := ""
+		if flags&63 == 63 {
+			tag = string(w[p : p+4])
+			p += 4
+		} else {
+			tag = woff2KnownTags[flags&63]
+		}
+		v, k := 0, 0
+		for {
+			c := w[p]
+			p++
+			v = v<<7 | int(c&0x7f)
+			if k++; c&0x80 == 0 || k == 5 {
+				break
+			}
+		}
+		if tr := flags >> 6; (tag == "glyf" || tag == "loca") != (tr == 3) || (tag != "glyf" && tag != "loca" && tr != 0) {
+			return fmt.Errorf("%s: transform version %d", tag, tr)
+		}
+		dir = append(dir, entry{tag, v})
+	}
+	raw, err := io.ReadAll(brotli.NewReader(bytes.NewReader(w[p : p+compLen])))
+	if err != nil {
+		return fmt.Errorf("brotli: %v", err)
+	}
+	off := 0
+	for i, e := range dir {
+		if e.tag != want[i].tag {
+			return fmt.Errorf("table %d is %q, want %q", i, e.tag, want[i].tag)
+		}
+		if off+e.length > len(raw) {
+			return fmt.Errorf("%s: past the end", e.tag)
+		}
+		got := raw[off : off+e.length]
+		off += e.length
+		exp := want[i].data
+		if e.tag == "head" {
+			exp = append([]byte{}, exp...)
+			binary.BigEndian.PutUint16(exp[16:], binary.BigEndian.Uint16(exp[16:])|1<<11)
+		}
+		if !bytes.Equal(got, exp) {
+			return fmt.Errorf("%s differs", e.tag)
+		}
+	}
+	if off != len(raw) {
+		return fmt.Errorf("%d bytes left over", len(raw)-off)
+	}
+	return nil
+}
+
+// A TrueType font whose glyph index doesn't add up gets no web font.
+func TestGlyphIndexChecked(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "fonts", "Poppins-Regular.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EncodeWOFF2(b, 0); err != nil {
+		t.Fatalf("intact font: %v", err)
+	}
+	_, tables, _ := sfntTables(b, 0)
+	var headOff int
+	n := int(binary.BigEndian.Uint16(b[4:]))
+	for i := 0; i < n; i++ {
+		r := b[12+16*i:]
+		if string(r[:4]) == "head" {
+			headOff = int(binary.BigEndian.Uint32(r[8:]))
+		}
+	}
+	_ = tables
+	bad := append([]byte{}, b...)
+	binary.BigEndian.PutUint16(bad[headOff+50:], 2) // indexToLocFormat
+	for name, enc := range map[string]func([]byte, int) ([]byte, error){"WOFF": EncodeWOFF, "WOFF2": EncodeWOFF2} {
+		if _, err := enc(bad, 0); err == nil || !strings.Contains(err.Error(), "glyph index format is 2") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad = append([]byte{}, b...)
+	binary.BigEndian.PutUint16(bad[headOff+50:], 1) // claims long offsets: loca too short
+	if _, err := EncodeWOFF2(bad, 0); err == nil || !strings.Contains(err.Error(), "too short") {
+		t.Errorf("short loca: %v", err)
 	}
 }

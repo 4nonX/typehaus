@@ -170,6 +170,9 @@ func EncodeWOFF(b []byte, index int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkGlyphIndex(tables); err != nil {
+		return nil, err
+	}
 	type entry struct {
 		t    sfntTable
 		data []byte
@@ -228,10 +231,51 @@ func base128(w *bytes.Buffer, v uint32) {
 	}
 }
 
+// checkGlyphIndex: a TrueType font's loca table indexes its glyphs, in the
+// format head.indexToLocFormat names, one entry per glyph in maxp plus one.
+// Browsers reject fonts where that doesn't add up, and so do WOFF2
+// decoders – better to refuse the web font with a reason.
+func checkGlyphIndex(tables []sfntTable) error {
+	var glyf, loca, head, maxp []byte
+	for _, t := range tables {
+		switch t.tag {
+		case "glyf":
+			glyf = t.data
+		case "loca":
+			loca = t.data
+		case "head":
+			head = t.data
+		case "maxp":
+			maxp = t.data
+		}
+	}
+	if glyf == nil && loca == nil {
+		return nil // CFF outlines
+	}
+	if glyf == nil || loca == nil {
+		return errors.New("the font has glyph outlines without their index (glyf and loca belong together)")
+	}
+	if len(maxp) < 6 {
+		return errors.New("the font has no usable maxp table")
+	}
+	format := int16(binary.BigEndian.Uint16(head[50:]))
+	if format != 0 && format != 1 {
+		return fmt.Errorf("the font's glyph index format is %d (only 0 and 1 exist)", format)
+	}
+	need := (int(binary.BigEndian.Uint16(maxp[4:])) + 1) * (2 << format)
+	if len(loca) < need {
+		return fmt.Errorf("the font's glyph index is too short (%d bytes for %d glyphs)", len(loca), need/(2<<format)-1)
+	}
+	return nil
+}
+
 // EncodeWOFF2 encodes a font (one face) as WOFF2.
 func EncodeWOFF2(b []byte, index int) ([]byte, error) {
 	flavor, tables, err := sfntTables(b, index)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkGlyphIndex(tables); err != nil {
 		return nil, err
 	}
 	known := map[string]int{}
