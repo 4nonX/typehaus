@@ -108,7 +108,7 @@ const ROUTES = {
   requests: { title: 'Requests', render: renderRequests, admin: true },
   activity: { title: 'Activity', render: renderActivity, admin: true },
   integrations: { title: 'Integrations', render: renderIntegrations, admin: true },
-  layout: { title: 'Layout', render: renderLayout, hidden: true }, // reached from the library
+  layout: { title: 'Layout', render: renderLayout, hidden: true, parent: 'library' }, // reached from the library
 };
 
 function route() {
@@ -154,7 +154,7 @@ function render() {
   if (def.admin && !S.me.is_admin) { location.hash = '#/library'; return; }
   const nav = Object.entries(ROUTES)
     .filter(([, d]) => !d.hidden && (!d.admin || S.me.is_admin))
-    .map(([k, d]) => `<a href="#/${k}" class="${k === r ? 'active' : ''}">${d.title}</a>`).join('');
+    .map(([k, d]) => `<a href="#/${k}" class="${k === r || def.parent === k ? 'active' : ''}">${d.title}</a>`).join('');
   app.innerHTML = `
     <div class="shell">
       <header class="top">
@@ -2834,6 +2834,18 @@ function layoutPick(role, avoid = new Set()) {
   if (!fam) return null;
   return layoutFace(fam, R.weight, !!R.italic).id;
 }
+// set one family on every block, each in the style that suits its role
+function layoutApplyFamily(st, fam) {
+  for (const b of st.blocks) {
+    const R = LAYOUT_ROLES[b.role] || {};
+    b.font = layoutFace(fam, R.weight || 400, !!R.italic).id;
+  }
+}
+// the family all blocks share, or null when they differ
+function layoutPageFamily(st, fams) {
+  const names = new Set(st.blocks.map((b) => fams.find((x) => x.faces.some((y) => y.id === b.font))?.name));
+  return names.size === 1 ? [...names][0] || null : null;
+}
 function layoutFace(fam, weight, italic) {
   return [...fam.faces].sort((a, b) => (Math.abs(a.weight - weight) - Math.abs(b.weight - weight)) || ((a.italic !== italic) - (b.italic !== italic)))[0];
 }
@@ -2882,15 +2894,11 @@ async function renderLayout(page) {
   const st = layoutLoad();
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   let sel = st.blocks[0]?.id;
-  // "Layout" on a family: set it in the headline (or the first block)
+  // "Layout" on a family: the whole page in that family
   const tryFam = params.get('family');
   if (tryFam) {
     const fam = layoutFamilies().find((x) => famKey(x.name) === famKey(tryFam));
-    const target = st.blocks.find((b) => b.role === 'headline') || st.blocks[0];
-    if (fam && target) {
-      target.font = layoutFace(fam, LAYOUT_ROLES[target.role]?.weight || 400, false).id;
-      sel = target.id;
-    }
+    if (fam) layoutApplyFamily(st, fam);
   }
   if (tryFam || params.get('s')) history.replaceState(null, '', '#/layout');
   layoutSave(st);
@@ -2899,9 +2907,15 @@ async function renderLayout(page) {
 
   page.innerHTML = `
     <div class="layout-page">
+      <a class="lay-back" href="#/library">← Library</a>
       <div class="lay-head">
-        <div><h1>Layout</h1><p class="muted small" style="margin:2px 0 0">Try library fonts together on a page. Click a block to edit its text; set it on the right.</p></div>
+        <div><h1>Layout</h1><p class="muted small" style="margin:2px 0 0">Try library fonts on a page. Click a block to edit its text (Esc to finish); set it on the right.</p></div>
         <div class="lay-tools">
+          <span class="lay-fontsw" title="Set the whole page in one family – ← → step through your library">
+            <button class="btn sm" id="lay-prev" aria-label="Previous family">‹</button>
+            <select id="lay-font" aria-label="Font for the whole page"></select>
+            <button class="btn sm" id="lay-next" aria-label="Next family">›</button>
+          </span>
           <select id="lay-tpl" title="Start again from a template"><option value="">Templates…</option>${Object.entries(LAYOUT_TEMPLATES).map(([k, t]) => `<option value="${k}">${esc(t.name)}</option>`).join('')}</select>
           <button class="btn sm" id="lay-dark" aria-pressed="${!!st.dark}">${st.dark ? 'Light paper' : 'Dark paper'}</button>
           <button class="btn sm" id="lay-share" title="A link that opens this layout – for anyone on this server">Copy link</button>
@@ -2943,7 +2957,6 @@ async function renderLayout(page) {
       el.oninput = () => { b.text = el.innerText; save(); };
     }
   };
-  const famOptions = fams.map((fam) => `<option value="${esc(fam.name)}"></option>`).join('');
   const drawPanel = () => {
     const b = st.blocks.find((x) => x.id === sel);
     if (!b) { panel.innerHTML = `<p class="muted small">Pick a block on the page.</p>${addRow()}`; wirePanel(); return; }
@@ -2952,8 +2965,7 @@ async function renderLayout(page) {
     const i = st.blocks.indexOf(b);
     panel.innerHTML = `
       <div class="lay-row"><label class="field">Block<select data-k="role">${Object.entries(LAYOUT_ROLES).map(([k, r]) => `<option value="${k}" ${k === b.role ? 'selected' : ''}>${r.label}</option>`).join('')}</select></label></div>
-      <div class="lay-row"><label class="field">Font family<input type="text" list="lay-fams" data-k="family" value="${esc(fam?.name || '')}" placeholder="${f ? '' : 'Not available – pick a family'}" autocomplete="off"></label>
-        <datalist id="lay-fams">${famOptions}</datalist></div>
+      <div class="lay-row"><label class="field">Font family<select data-k="family">${f ? '' : '<option value="">Not available – pick a family</option>'}${fams.map((x) => `<option ${x === fam ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label></div>
       <div class="lay-row"><label class="field">Style<select data-k="font" ${fam ? '' : 'disabled'}>${fam ? fam.faces.slice().sort((a, b2) => (a.italic - b2.italic) || (a.weight - b2.weight)).map((x) => `<option value="${x.id}" ${x.id === b.font ? 'selected' : ''}>${esc(x.style)}</option>`).join('') : ''}</select></label></div>
       ${fam && !fam.faces.some(isOn) ? `<p class="small muted" style="margin:-4px 0 8px">Not switched on for you – fine here; <a href="#" data-act-fam>switch it on</a> to use it in your apps.</p>` : ''}
       ${slider('Size', 'size', b.size, 6, 140, 0.5, 'pt')}
@@ -2994,7 +3006,7 @@ async function renderLayout(page) {
     const b = st.blocks.find((x) => x.id === sel);
     $$('[data-k]', panel).forEach((inp) => {
       const k = inp.dataset.k;
-      const ev = inp.type === 'range' || inp.type === 'number' || k === 'family' ? 'input' : 'change';
+      const ev = inp.type === 'range' || inp.type === 'number' ? 'input' : 'change';
       inp.addEventListener(ev, () => {
         if (!b) return;
         if (k === 'family') {
@@ -3002,9 +3014,9 @@ async function renderLayout(page) {
           if (!fam) return;
           const cur = fontOf(b);
           b.font = layoutFace(fam, cur?.weight || LAYOUT_ROLES[b.role]?.weight || 400, !!cur?.italic).id;
-          restyle(); drawPanel(); $('[data-k="family"]', panel)?.focus(); return;
+          restyle(); drawFontSwitch(); drawPanel(); $('[data-k="family"]', panel)?.focus(); return;
         }
-        if (k === 'font') b.font = +inp.value;
+        if (k === 'font') { b.font = +inp.value; drawFontSwitch(); }
         else if (k === 'role') b.role = inp.value;
         else if (k === 'upper') b.upper = inp.checked;
         else if (k === 'cols') b.cols = +inp.value;
@@ -3031,20 +3043,20 @@ async function renderLayout(page) {
     $$('[data-move]', panel).forEach((btn) => btn.onclick = () => {
       const i = st.blocks.indexOf(b), j = i + +btn.dataset.move;
       [st.blocks[i], st.blocks[j]] = [st.blocks[j], st.blocks[i]];
-      save(); drawPaper(); drawPanel();
+      save(); drawPaper(); drawFontSwitch(); drawPanel();
     });
     const dup = $('[data-dup]', panel);
     if (dup) dup.onclick = () => {
       const c = { ...b, id: Math.random().toString(36).slice(2, 9) };
       st.blocks.splice(st.blocks.indexOf(b) + 1, 0, c);
-      sel = c.id; save(); drawPaper(); drawPanel();
+      sel = c.id; save(); drawPaper(); drawFontSwitch(); drawPanel();
     };
     const del = $('[data-del]', panel);
     if (del) del.onclick = () => {
       const i = st.blocks.indexOf(b);
       st.blocks.splice(i, 1);
       sel = st.blocks[Math.min(i, st.blocks.length - 1)]?.id;
-      save(); drawPaper(); drawPanel();
+      save(); drawPaper(); drawFontSwitch(); drawPanel();
     };
     const act = $('[data-act-fam]', panel);
     if (act) act.onclick = async (e) => {
@@ -3057,19 +3069,56 @@ async function renderLayout(page) {
     add.onchange = () => {
       if (!add.value) return;
       const nb = layoutBlock(add.value, new Set());
+      const pageFam = fams.find((x) => x.name === layoutPageFamily(st, fams));
+      if (pageFam) nb.font = layoutFace(pageFam, LAYOUT_ROLES[nb.role].weight || 400, !!LAYOUT_ROLES[nb.role].italic).id;
       const at = b ? st.blocks.indexOf(b) + 1 : st.blocks.length;
       st.blocks.splice(at, 0, nb);
-      sel = nb.id; save(); drawPaper(); drawPanel();
+      sel = nb.id; save(); drawPaper(); drawFontSwitch(); drawPanel();
     };
   };
 
+  const fontSel = $('#lay-font', page);
+  const drawFontSwitch = () => {
+    const cur = layoutPageFamily(st, fams);
+    fontSel.innerHTML = (cur ? '' : '<option value="">Mixed fonts</option>') + fams.map((x) => `<option ${x.name === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+  };
+  const setPageFamily = (name) => {
+    const fam = fams.find((x) => x.name === name);
+    if (!fam) return;
+    layoutApplyFamily(st, fam);
+    save();
+    for (const el of $$('.lblock', paper)) styleBlock(el, st.blocks.find((x) => x.id === el.dataset.id));
+    drawFontSwitch(); drawPanel();
+  };
+  const step = (d) => {
+    if (!fams.length) return;
+    const cur = layoutPageFamily(st, fams) || fontOf(st.blocks.find((x) => x.id === sel) || st.blocks[0])?.family;
+    const i = fams.findIndex((x) => x.name === cur);
+    setPageFamily(fams[((i < 0 ? -1 : i) + d + fams.length) % fams.length].name);
+  };
+  fontSel.onchange = () => setPageFamily(fontSel.value);
+  $('#lay-prev', page).onclick = () => step(-1);
+  $('#lay-next', page).onclick = () => step(1);
+  // Esc ends editing; ← → step through families when not editing text
+  const onKey = (e) => {
+    if (!page.isConnected) { document.removeEventListener('keydown', onKey); return; }
+    if (e.key === 'Escape' && document.activeElement?.classList.contains('lblock')) { document.activeElement.blur(); return; }
+    const t = e.target;
+    if (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+  };
+  document.addEventListener('keydown', onKey);
+  $('.lay-stage', page).addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('lay-stage') || e.target === paper) document.activeElement?.blur?.();
+  });
   $('#lay-tpl', page).onchange = (e) => {
     const k = e.target.value;
     if (!k) return;
     if (!confirmReplace()) { e.target.value = ''; return; }
     Object.assign(st, layoutFromTemplate(k), { dark: st.dark, width: st.width });
     sel = st.blocks[0]?.id;
-    save(); drawPaper(); drawPanel(); e.target.value = '';
+    save(); drawPaper(); drawFontSwitch(); drawPanel(); e.target.value = '';
   };
   const confirmReplace = () => window.confirm('Replace this layout with the template? Your text and settings here are lost.');
   $('#lay-dark', page).onclick = (e) => {
@@ -3094,6 +3143,7 @@ async function renderLayout(page) {
     drawPanel();
   };
   drawPaper();
+  drawFontSwitch();
   drawPanel();
 }
 

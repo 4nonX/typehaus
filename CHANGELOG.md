@@ -6,6 +6,15 @@ The section matching a release tag becomes that release's notes on GitHub.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-19
+
+### Fixed
+- **Layout sandbox: a way out and a way through your fonts.** The page now has a *← Library* link and keeps *Library* highlighted in the navigation; Esc (or a click beside the page) ends text editing.
+- **Layout on a family shows that family.** It set only the headline, so the page mixed fonts; now every block is set in the family, each in a fitting style (italic for the pull quote). Change single blocks to try pairings.
+
+### Added
+- **Switch fonts in the layout sandbox:** a *Font* menu sets the whole page in one family, and ‹ › (or the ← → keys outside the text) step through the library. The font of a single block is chosen from a menu instead of a search field; new blocks take the page's family.
+
 ## [1.3.0] - 2026-11-17
 
 ### Added

@@ -507,3 +507,8 @@ details.existing li { margin: 3px 0; }
   .lblock, .lblock:hover, .lblock.sel { box-shadow: none; }
   .lblock.sel::before { display: none; }
 }
+.lay-back { display: inline-block; margin: 0 0 6px; font-size: 13px; color: var(--ink-2); text-decoration: none; }
+.lay-back:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.lay-fontsw { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
+.lay-fontsw select { width: auto; min-width: 190px; max-width: 260px; }
+.lay-fontsw .btn { padding-left: 10px; padding-right: 10px; }
